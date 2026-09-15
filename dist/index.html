@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b2240" />
+    <meta
+      name="description"
+      content="한양대학교 ERICA PRIME 컨퍼런스홀 전용 좌석배치 제작기"
+    />
+    <title>ERICA Seat Planner · PRIME Conference Hall</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">E</div>
+          <div>
+            <p class="eyebrow">HANYANG ERICA · PRIME CONFERENCE HALL</p>
+            <h1>좌석배치 제작기</h1>
+          </div>
+        </div>
+
+        <div class="header-actions edit-only">
+          <button class="button ghost" id="undo-button" type="button" disabled aria-label="실행 취소">↶ <span>취소</span></button>
+          <button class="button ghost" id="redo-button" type="button" disabled aria-label="다시 실행">↷ <span>복원</span></button>
+          <div class="divider" aria-hidden="true"></div>
+          <button class="button ghost" id="new-button" type="button">새 배치</button>
+          <button class="button ghost" id="data-menu-button" type="button" aria-haspopup="menu" aria-expanded="false">가져오기·내보내기</button>
+          <div class="data-menu" id="data-menu" role="menu" hidden>
+            <button type="button" data-action="json-export" role="menuitem">배치 데이터 JSON 내보내기</button>
+            <button type="button" data-action="json-import" role="menuitem">JSON 다시 불러오기</button>
+            <button type="button" data-action="csv-export" role="menuitem">참석자 명단 CSV 내보내기</button>
+            <button type="button" data-action="csv-import" role="menuitem">CSV 명단 불러오기</button>
+          </div>
+        </div>
+
+        <div class="mode-switch" role="group" aria-label="화면 모드">
+          <button type="button" class="active" data-mode="edit">편집</button>
+          <button type="button" data-mode="output">출력</button>
+        </div>
+      </header>
+
+      <section class="event-strip" aria-label="행사 정보">
+        <label class="field event-title-field">
+          <span>행사명</span>
+          <input id="event-title" type="text" value="PRIME 컨퍼런스홀 좌석배치" />
+        </label>
+        <label class="field">
+          <span>일시</span>
+          <input id="event-date" type="datetime-local" />
+        </label>
+        <label class="field">
+          <span>주최·참석 기관</span>
+          <input id="event-organizations" type="text" placeholder="예: 한양대학교 ERICA · 협력기관" />
+        </label>
+        <label class="field location-field">
+          <span>장소</span>
+          <input id="event-location" type="text" />
+        </label>
+        <label class="field note-field">
+          <span>비고</span>
+          <input id="event-note" type="text" placeholder="행사 운영 메모" />
+        </label>
+      </section>
+
+      <main class="workspace">
+        <aside class="attendee-panel edit-only" aria-label="참석자 관리">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">ATTENDEES</p>
+              <h2>참석자</h2>
+            </div>
+            <button class="button primary" id="add-attendee-button" type="button">+ 참석자 추가</button>
+          </div>
+
+          <div class="summary-grid" aria-label="배정 현황">
+            <div><strong id="total-count">0</strong><span>전체</span></div>
+            <div><strong id="assigned-count">0</strong><span>배정</span></div>
+            <div><strong id="unassigned-count">0</strong><span>미배정</span></div>
+            <div><strong id="available-count">63</strong><span>빈 좌석</span></div>
+          </div>
+
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <span class="sr-only">참석자 검색</span>
+            <input id="attendee-search" type="search" placeholder="이름·소속·직위 검색" />
+          </label>
+
+          <div class="filter-tabs" role="tablist" aria-label="참석자 목록 필터">
+            <button class="active" type="button" role="tab" data-filter="unassigned">미배정 <span id="tab-unassigned-count">0</span></button>
+            <button type="button" role="tab" data-filter="all">전체 <span id="tab-all-count">0</span></button>
+          </div>
+
+          <div class="attendee-list" id="attendee-list" data-unassigned-drop="true" aria-live="polite"></div>
+          <p class="drop-hint" id="drop-hint">좌석의 참석자를 이곳으로 끌면 배정이 해제됩니다.</p>
+
+          <div class="selected-card" id="selected-card" hidden>
+            <div>
+              <span class="selected-label">선택한 참석자</span>
+              <strong id="selected-name"></strong>
+              <small id="selected-meta"></small>
+            </div>
+            <button type="button" id="clear-selection-button" aria-label="선택 해제">×</button>
+          </div>
+        </aside>
+
+        <section class="planner-panel" aria-label="좌석 배치도">
+          <div class="planner-toolbar edit-only">
+            <div class="legend">
+              <span><i class="legend-dot empty"></i>빈 좌석</span>
+              <span><i class="legend-dot main"></i>메인석</span>
+              <span><i class="legend-dot staff"></i>수행원석</span>
+            </div>
+            <div class="canvas-controls">
+              <label class="switch-control">
+                <input id="seat-number-toggle" type="checkbox" checked />
+                <span class="switch"></span>
+                좌석번호
+              </label>
+              <button type="button" id="zoom-out-button" aria-label="축소">−</button>
+              <output id="zoom-output">100%</output>
+              <button type="button" id="zoom-in-button" aria-label="확대">+</button>
+              <button class="fit-button" type="button" id="fit-button">화면 맞춤</button>
+              <button class="fit-button" type="button" id="reset-view-button">초기 위치</button>
+            </div>
+          </div>
+
+          <div class="print-heading">
+            <p>HANYANG UNIVERSITY ERICA</p>
+            <h2 id="print-event-title">PRIME 컨퍼런스홀 좌석배치</h2>
+            <div id="print-event-meta"></div>
+          </div>
+
+          <div class="room-viewport" id="room-viewport">
+            <svg
+              id="room-svg"
+              viewBox="0 0 1400 1000"
+              role="img"
+              aria-labelledby="room-title room-desc"
+              tabindex="0"
+            >
+              <title id="room-title">PRIME 컨퍼런스홀 좌석 배치도</title>
+              <desc id="room-desc">좌우 곡선형 메인 테이블 48석, 중앙 상석 1석, 외곽 수행원석 14석으로 구성된 배치도</desc>
+              <defs>
+                <linearGradient id="roomFloor" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#f7f4ed" />
+                  <stop offset="1" stop-color="#ede9df" />
+                </linearGradient>
+                <linearGradient id="tableWood" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#6e351f" />
+                  <stop offset="0.48" stop-color="#9b5431" />
+                  <stop offset="1" stop-color="#6d321f" />
+                </linearGradient>
+                <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0b1b2d" flood-opacity=".15" />
+                </filter>
+                <style>
+                  .svg-label{font-family:Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:.08em}
+                  .seat-text{font-family:Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none}
+                  .seat-group{cursor:pointer;outline:none}
+                  .seat-group:focus .seat-hit,.seat-group.selected .seat-hit{stroke:#0d75d8;stroke-width:3}
+                  .seat-group.drop-target .seat-hit{stroke:#16a36a;stroke-width:4;stroke-dasharray:7 4}
+                </style>
+              </defs>
+
+              <rect x="18" y="18" width="1364" height="964" rx="20" fill="url(#roomFloor)" stroke="#c8c3b8" stroke-width="2" />
+              <path d="M68 78H1332" stroke="#d2ccc0" stroke-width="2" />
+              <g aria-label="스크린">
+                <rect x="555" y="52" width="290" height="54" rx="8" fill="#152a44" />
+                <rect x="570" y="64" width="260" height="28" rx="4" fill="#eef5f8" />
+                <text x="700" y="83" text-anchor="middle" font-size="13" font-weight="700" fill="#254d6d" class="svg-label">SCREEN · 회의실 전면</text>
+              </g>
+
+              <g id="staff-fixtures" opacity=".98">
+                <path d="M175 245 C155 410 155 675 175 840" fill="none" stroke="#7d4932" stroke-width="74" stroke-linecap="round" opacity=".88" />
+                <path d="M1225 245 C1245 410 1245 675 1225 840" fill="none" stroke="#7d4932" stroke-width="74" stroke-linecap="round" opacity=".88" />
+                <text x="174" y="210" text-anchor="middle" font-size="12" font-weight="800" fill="#6a5c50" class="svg-label">수행원석 · 7</text>
+                <text x="1226" y="210" text-anchor="middle" font-size="12" font-weight="800" fill="#6a5c50" class="svg-label">수행원석 · 7</text>
+              </g>
+
+              <g id="main-table" filter="url(#softShadow)">
+                <path d="M490 223 C438 400 438 675 490 858" fill="none" stroke="#4a2418" stroke-width="150" stroke-linecap="round" />
+                <path d="M490 223 C438 400 438 675 490 858" fill="none" stroke="url(#tableWood)" stroke-width="136" stroke-linecap="round" />
+                <path d="M910 223 C962 400 962 675 910 858" fill="none" stroke="#4a2418" stroke-width="150" stroke-linecap="round" />
+                <path d="M910 223 C962 400 962 675 910 858" fill="none" stroke="url(#tableWood)" stroke-width="136" stroke-linecap="round" />
+                <path d="M490 223 Q700 150 910 223" fill="none" stroke="#4a2418" stroke-width="150" stroke-linecap="round" />
+                <path d="M490 223 Q700 150 910 223" fill="none" stroke="url(#tableWood)" stroke-width="136" stroke-linecap="round" />
+              </g>
+
+              <g id="center-aisle" aria-label="중앙 공간">
+                <path d="M610 265 Q700 230 790 265 L810 855 Q700 890 590 855Z" fill="#f9f8f4" stroke="#d7d1c7" stroke-dasharray="5 6" />
+                <g transform="translate(700 440)">
+                  <ellipse cx="0" cy="28" rx="66" ry="28" fill="#6a3a27" />
+                  <ellipse cx="0" cy="3" rx="66" ry="28" fill="#81513b" />
+                  <circle cx="-35" cy="0" r="23" fill="#59713f" />
+                  <circle cx="0" cy="-12" r="27" fill="#6f8e4c" />
+                  <circle cx="37" cy="2" r="22" fill="#4f6c39" />
+                </g>
+                <g transform="translate(700 660) scale(.84)">
+                  <ellipse cx="0" cy="28" rx="66" ry="28" fill="#6a3a27" />
+                  <ellipse cx="0" cy="3" rx="66" ry="28" fill="#81513b" />
+                  <circle cx="-35" cy="0" r="23" fill="#59713f" />
+                  <circle cx="0" cy="-12" r="27" fill="#6f8e4c" />
+                  <circle cx="37" cy="2" r="22" fill="#4f6c39" />
+                </g>
+                <text x="700" y="790" text-anchor="middle" font-size="12" font-weight="700" fill="#9b9589" class="svg-label">CENTRAL AISLE</text>
+              </g>
+
+              <g id="room-details" opacity=".82">
+                <path d="M1325 205v86m0 25v86" stroke="#8f897f" stroke-width="9" stroke-linecap="round" />
+                <path d="M1325 220a55 55 0 0 0-55 55" fill="none" stroke="#b3ada2" stroke-width="2" stroke-dasharray="5 5" />
+                <path d="M1325 331a55 55 0 0 0-55 55" fill="none" stroke="#b3ada2" stroke-width="2" stroke-dasharray="5 5" />
+                <text x="1297" y="190" text-anchor="middle" font-size="11" fill="#817a70" class="svg-label">출입구</text>
+                <text x="75" y="945" font-size="11" fill="#8b8479" class="svg-label">PRIME CONFERENCE HALL · ROOM TEMPLATE 01</text>
+                <text x="1325" y="945" text-anchor="end" font-size="11" fill="#8b8479" class="svg-label">252.19㎡ · 면적 참고</text>
+              </g>
+
+              <g id="seat-layer"></g>
+            </svg>
+            <div class="canvas-tip edit-only">빈 공간을 드래그해 이동 · Ctrl/⌘ + 휠로 확대·축소</div>
+            <div class="drag-ghost" id="drag-ghost" hidden></div>
+          </div>
+
+          <div class="output-actions output-only">
+            <button class="button ghost" type="button" id="print-button">인쇄 · PDF 저장</button>
+            <button class="button primary" type="button" id="png-button">PNG 이미지 저장</button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="statusbar">
+        <span><i class="save-dot"></i><strong id="save-status">자동저장됨</strong></span>
+        <span>PRIME Conference Hall · 메인 49석 + 수행원 14석 = 총 63석</span>
+      </footer>
+    </div>
+
+    <dialog id="attendee-dialog" class="modal">
+      <form method="dialog" id="attendee-form">
+        <div class="modal-heading">
+          <div><p class="eyebrow">ATTENDEE</p><h2 id="attendee-dialog-title">참석자 추가</h2></div>
+          <button class="icon-button" value="cancel" type="submit" aria-label="닫기">×</button>
+        </div>
+        <input id="attendee-id" type="hidden" />
+        <div class="form-grid">
+          <label class="field full"><span>이름 *</span><input id="attendee-name" required autocomplete="off" /></label>
+          <label class="field"><span>소속</span><input id="attendee-org" autocomplete="organization" /></label>
+          <label class="field"><span>직위</span><input id="attendee-title" /></label>
+          <label class="field"><span>구분</span>
+            <select id="attendee-type">
+              <option>교내</option><option>외부</option><option>주요 참석자</option><option>수행원</option><option>기타</option>
+            </select>
+          </label>
+          <label class="field"><span>기관·그룹</span><input id="attendee-group" placeholder="예: 한양대학교" /></label>
+          <label class="field full"><span>비고</span><textarea id="attendee-note" rows="3"></textarea></label>
+        </div>
+        <div class="modal-actions">
+          <button class="button danger" id="delete-attendee-button" type="button" hidden>삭제</button>
+          <span></span>
+          <button class="button ghost" value="cancel" type="submit">취소</button>
+          <button class="button primary" id="save-attendee-button" type="button">저장</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="reset-dialog" class="modal confirm-modal">
+      <form method="dialog">
+        <div class="confirm-icon">!</div>
+        <h2>새 배치를 만들까요?</h2>
+        <p>현재 행사 정보, 참석자, 좌석 배정이 모두 지워집니다. 내보내지 않은 데이터는 복구할 수 없습니다.</p>
+        <div class="modal-actions centered">
+          <button class="button ghost" value="cancel">취소</button>
+          <button class="button danger solid" id="confirm-reset-button" value="default">새 배치 만들기</button>
+        </div>
+      </form>
+    </dialog>
+
+    <input id="json-file-input" type="file" accept="application/json,.json" hidden />
+    <input id="csv-file-input" type="file" accept="text/csv,.csv" hidden />
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
