@@ -60,6 +60,7 @@
       mainTable: Object.freeze({
         xStart: 300,
         xEnd: 1350,
+        openEndX: 1390,
         upperBaseY: 390,
         lowerBaseY: 640,
         upperCurveDepth: 24,
@@ -71,7 +72,7 @@
         screenEndClearance: mmToUnits(1000),
       }),
       staffTables: STAFF_TABLE_MODULES,
-      screen: Object.freeze({ x: 1447, y: 450, width: 24, height: 205 }),
+      screen: Object.freeze({ x: 1447, y: 412.5, width: 24, height: 205 }),
       pc: Object.freeze({ x: 1370, y: 150, width: 88, height: 82 }),
       planters: Object.freeze([{ x: 710, y: 515 }, { x: 1010, y: 515 }]),
       windows: Object.freeze({ x: 230, y: 805, width: 1110, panes: 6 }),
@@ -152,6 +153,8 @@
   const staffSeatIds = new Set(roomTemplate.seats.filter((seat) => seat.section === "staff").map((seat) => seat.id));
   const groupedStaffSeatIds = roomTemplate.geometry.staffTables.flatMap((table) => table.seatIds);
   const mainTableGeometry = roomTemplate.geometry.mainTable;
+  const headSeatGeometry = roomTemplate.seats.find((seat) => seat.id === "HEAD-01");
+  const screenCenterY = roomTemplate.geometry.screen.y + roomTemplate.geometry.screen.height / 2;
   const midpoint = .5;
   if (
     uniqueSeatIds.size !== 63 ||
@@ -162,7 +165,9 @@
     groupedStaffSeatIds.some((seatId) => !staffSeatIds.has(seatId)) ||
     new Set(groupedStaffSeatIds).size !== 14 ||
     mainTableGeometry.depth !== mmToUnits(800) ||
-    mainTableGeometry.screenWallFaceX - (mainTableGeometry.xEnd + mainTableGeometry.depth / 2) !== mainTableGeometry.screenEndClearance ||
+    mainTableGeometry.screenWallFaceX - mainTableGeometry.openEndX !== mainTableGeometry.screenEndClearance ||
+    !headSeatGeometry ||
+    Math.abs(headSeatGeometry.y - screenCenterY) > .001 ||
     upperTableY(midpoint) >= upperTableY(0) ||
     lowerTableY(midpoint) <= lowerTableY(0) ||
     roomTemplate.seats.filter((seat) => seat.section === "staff").some((seat) => seat.y > 220)
@@ -369,27 +374,48 @@
       elements.roomShell.append(group);
     }
 
-    const upperControlY = table.upperBaseY - table.upperCurveDepth * 2;
-    const lowerControlY = table.lowerBaseY + table.lowerCurveDepth * 2;
-    const upperPath = `M${table.xStart} ${table.upperBaseY} Q${(table.xStart + table.xEnd) / 2} ${upperControlY} ${table.xEnd} ${table.upperBaseY}`;
-    const lowerPath = `M${table.xStart} ${table.lowerBaseY} Q${(table.xStart + table.xEnd) / 2} ${lowerControlY} ${table.xEnd} ${table.lowerBaseY}`;
-    const connectorPath = `M${table.connectorX} ${table.upperBaseY} L${table.connectorX} ${table.lowerBaseY}`;
+    const halfDepth = table.depth / 2;
+    const halfConnectorDepth = table.connectorDepth / 2;
+    const leftOuterX = table.connectorX - halfConnectorDepth;
+    const leftInnerX = table.connectorX + halfConnectorDepth;
+    const outerControlX = (leftOuterX + table.openEndX) / 2;
+    const innerControlX = (leftInnerX + table.openEndX) / 2;
+    const upperOuterY = table.upperBaseY - halfDepth;
+    const upperInnerY = table.upperBaseY + halfDepth;
+    const lowerInnerY = table.lowerBaseY - halfDepth;
+    const lowerOuterY = table.lowerBaseY + halfDepth;
+    const tableOutlinePath = [
+      `M${leftOuterX} ${upperOuterY}`,
+      `Q${outerControlX} ${upperOuterY - table.upperCurveDepth * 2} ${table.openEndX} ${upperOuterY}`,
+      `L${table.openEndX} ${upperInnerY}`,
+      `Q${innerControlX} ${upperInnerY - table.upperCurveDepth * 2} ${leftInnerX} ${upperInnerY}`,
+      `L${leftInnerX} ${lowerInnerY}`,
+      `Q${innerControlX} ${lowerInnerY + table.lowerCurveDepth * 2} ${table.openEndX} ${lowerInnerY}`,
+      `L${table.openEndX} ${lowerOuterY}`,
+      `Q${outerControlX} ${lowerOuterY + table.lowerCurveDepth * 2} ${leftOuterX} ${lowerOuterY}`,
+      "Z",
+    ].join(" ");
     const tableGroup = svgNode("g", {
       id: "main-table",
       filter: "url(#softShadow)",
       "data-long-edge-depth-mm": 800,
       "data-screen-clearance-mm": 1000,
       "data-units-per-meter": geometry.unitsPerMeter,
+      "data-connected-geometry": "true",
+      "data-open-side": "right",
+      "data-endcaps": "square",
+      "data-head-screen-axis-y": screenCenterY,
     });
-    for (const path of [upperPath, lowerPath]) {
-      tableGroup.append(
-        svgNode("path", { d: path, fill: "none", stroke: "#492316", "stroke-width": table.depth + 12, "stroke-linecap": "round" }),
-        svgNode("path", { d: path, fill: "none", stroke: "url(#tableWood)", "stroke-width": table.depth, "stroke-linecap": "round" }),
-      );
-    }
     tableGroup.append(
-      svgNode("path", { d: connectorPath, fill: "none", stroke: "#492316", "stroke-width": table.connectorDepth + 12, "stroke-linecap": "round" }),
-      svgNode("path", { d: connectorPath, fill: "none", stroke: "url(#tableWood)", "stroke-width": table.connectorDepth, "stroke-linecap": "round", "data-measurement-status": "unmeasured" }),
+      svgNode("path", {
+        id: "main-table-surface",
+        d: tableOutlinePath,
+        fill: "url(#tableWood)",
+        stroke: "#492316",
+        "stroke-width": 12,
+        "stroke-linejoin": "miter",
+        "data-measurement-status": "long-edges-measured-connector-unmeasured",
+      }),
     );
     elements.fixtureLayer.append(tableGroup);
 
@@ -411,11 +437,17 @@
     elements.fixtureLayer.append(staffGroup);
 
     const screen = geometry.screen;
-    elements.fixtureLayer.append(
+    const screenGroup = svgNode("g", {
+      id: "screen-fixture",
+      "data-center-y": screen.y + screen.height / 2,
+      "data-aligned-seat-id": "HEAD-01",
+    });
+    screenGroup.append(
       svgNode("rect", { x: screen.x, y: screen.y, width: screen.width, height: screen.height, rx: 4, fill: "#132a44" }),
       svgNode("rect", { x: screen.x + 5, y: screen.y + 13, width: screen.width - 10, height: screen.height - 26, rx: 2, fill: "#edf5f8" }),
       svgNode("text", { x: screen.x - 10, y: screen.y + screen.height / 2, transform: `rotate(-90 ${screen.x - 10} ${screen.y + screen.height / 2})`, "text-anchor": "middle", "font-size": 14, "font-weight": 800, fill: "#183d60", class: "svg-label" }, "스크린"),
     );
+    elements.fixtureLayer.append(screenGroup);
 
     const pc = geometry.pc;
     elements.fixtureLayer.append(
