@@ -5,9 +5,37 @@
   const SCENE = { width: 1600, height: 900 };
   const FULL_VIEW = { x: 0, y: 0, width: SCENE.width, height: SCENE.height, zoom: 1 };
   const GROUP_COLORS = ["#1268b3", "#7b4ca0", "#b55725", "#2b7a65", "#8f3e55", "#556b2f"];
+  const UNITS_PER_METER = 100;
+  const mmToUnits = (millimeters) => (millimeters / 1000) * UNITS_PER_METER;
   const curveBow = (t) => 4 * t * (1 - t);
   const upperTableY = (t) => 390 - 24 * curveBow(t);
   const lowerTableY = (t) => 640 + 24 * curveBow(t);
+  const STAFF_TABLE_MODULES = Object.freeze(Array.from({ length: 7 }, (_, index) => {
+    const width = 106;
+    const gap = 5;
+    const x = 505 + index * (width + gap);
+    return Object.freeze({
+      id: `STAFF-TABLE-${String(index + 1).padStart(2, "0")}`,
+      x,
+      y: 185,
+      width,
+      depth: mmToUnits(800),
+      seatIds: Object.freeze([
+        `STAFF-${String(index * 2 + 1).padStart(2, "0")}`,
+        `STAFF-${String(index * 2 + 2).padStart(2, "0")}`,
+      ]),
+    });
+  }));
+
+  const FIELD_MEASUREMENTS = Object.freeze([
+    Object.freeze({ dimensionId: "MAIN-UPPER-DEPTH", valueMm: 800, source: "IMG_2248(1).jpg", meaning: "상단 메인 장변 상판 앞뒤 깊이", anchorA: "상판 안쪽 가장자리", anchorB: "상판 바깥쪽 가장자리", sourceType: "user-marked measurement", endpointStatus: "resolved", applicationStatus: "geometry-applied", valueConfidence: "high", geometryConfidence: "high" }),
+    Object.freeze({ dimensionId: "MAIN-LOWER-DEPTH", valueMm: 800, source: "IMG_2248(1).jpg", meaning: "하단 메인 장변 상판 앞뒤 깊이", anchorA: "상판 안쪽 가장자리", anchorB: "상판 바깥쪽 가장자리", sourceType: "user-marked measurement", endpointStatus: "resolved", applicationStatus: "geometry-applied", valueConfidence: "high", geometryConfidence: "high" }),
+    Object.freeze({ dimensionId: "STAFF-MODULE-DEPTH", valueMm: 800, source: "IMG_2245(1).jpg", meaning: "수행원 대표 테이블 모듈 앞뒤 깊이", anchorA: "대표 모듈 안쪽 가장자리", anchorB: "대표 모듈 바깥쪽 가장자리", sourceType: "user-marked measurement", endpointStatus: "resolved", applicationStatus: "geometry-applied", valueConfidence: "high", geometryConfidence: "medium" }),
+    Object.freeze({ dimensionId: "SCREEN-END-CLEARANCE", valueMm: 1000, source: "IMG_2249(2).jpg", meaning: "오른쪽 열린 끝의 상판 끝과 스크린 쪽 벽 사이", anchorA: "메인 장변 상판의 오른쪽 외곽", anchorB: "스크린 쪽 벽 안쪽 면", sourceType: "user-marked measurement", endpointStatus: "resolved", applicationStatus: "geometry-applied", valueConfidence: "high", geometryConfidence: "medium" }),
+    Object.freeze({ dimensionId: "HEAD-WALL-CLEARANCE", valueMm: 1800, source: "IMG_2241(1).jpg", meaning: "엠블럼 벽 쪽 상석 뒤 표시 구간", anchorA: "엠블럼 벽면", anchorB: "의자 등받이 또는 상판 외곽 - 사진상 불명확", sourceType: "user-marked measurement", endpointStatus: "unresolved", applicationStatus: "reference-only", valueConfidence: "high", geometryConfidence: "low" }),
+    Object.freeze({ dimensionId: "HEAD-DOOR-WALL-CLEARANCE", valueMm: 2200, source: "IMG_2246(1).jpg", meaning: "상석 쪽 테이블 모서리와 목재 출입문 옆 벽 사이", anchorA: "상석 상판 모서리 - 사진상 후보", anchorB: "목재 출입문 옆 벽 또는 문틀 면 - 사진상 불명확", sourceType: "user-marked measurement", endpointStatus: "unresolved", applicationStatus: "reference-only", valueConfidence: "high", geometryConfidence: "low" }),
+    Object.freeze({ dimensionId: "HEAD-CONNECTOR-DEPTH", valueMm: null, source: "IMG_2240(1).jpg", meaning: "상석 연결 상판 앞뒤 깊이", anchorA: "연결 상판 안쪽 가장자리", anchorB: "연결 상판 바깥쪽 가장자리", sourceType: "unmeasured visual reference", endpointStatus: "unresolved", applicationStatus: "reference-only", valueConfidence: "none", geometryConfidence: "medium" }),
+  ]);
 
   const roomTemplate = Object.freeze({
     id: "prime-conference-hall",
@@ -21,6 +49,8 @@
     }),
     geometry: Object.freeze({
       scene: SCENE,
+      unitsPerMeter: UNITS_PER_METER,
+      measurements: FIELD_MEASUREMENTS,
       roomPath: "M430 72 H1490 V828 H72 V286 H218 V244 H430 Z",
       corridorPath: "M40 45 H430 V244 H218 V286 H40 Z",
       doors: Object.freeze([
@@ -29,15 +59,18 @@
       ]),
       mainTable: Object.freeze({
         xStart: 300,
-        xEnd: 1320,
+        xEnd: 1350,
         upperBaseY: 390,
         lowerBaseY: 640,
         upperCurveDepth: 24,
         lowerCurveDepth: 24,
         connectorX: 300,
-        thickness: 54,
+        depth: mmToUnits(800),
+        connectorDepth: 54,
+        screenWallFaceX: 1490,
+        screenEndClearance: mmToUnits(1000),
       }),
-      staffTable: Object.freeze({ x: 505, y: 195, width: 770, height: 54 }),
+      staffTables: STAFF_TABLE_MODULES,
       screen: Object.freeze({ x: 1447, y: 450, width: 24, height: 205 }),
       pc: Object.freeze({ x: 1370, y: 150, width: 88, height: 82 }),
       planters: Object.freeze([{ x: 710, y: 515 }, { x: 1010, y: 515 }]),
@@ -51,7 +84,7 @@
         sectionLabel: "상단 메인석 · 벽체 측",
         number: index + 1,
         t: index / 23,
-        x: 350 + (945 * index) / 23,
+        x: 350 + (975 * index) / 23,
         y: upperTableY(index / 23) - 69,
         direction: "down",
         width: 38,
@@ -64,7 +97,7 @@
         sectionLabel: "하단 메인석 · 창가 측",
         number: index + 1,
         t: index / 23,
-        x: 350 + (945 * index) / 23,
+        x: 350 + (975 * index) / 23,
         y: lowerTableY(index / 23) + 69,
         direction: "up",
         width: 38,
@@ -82,18 +115,19 @@
         width: 60,
         height: 48,
       },
-      ...Array.from({ length: 14 }, (_, index) => ({
-        id: `STAFF-${String(index + 1).padStart(2, "0")}`,
+      ...STAFF_TABLE_MODULES.flatMap((table, tableIndex) => table.seatIds.map((id, seatIndex) => ({
+        id,
         section: "staff",
         displaySection: "upper-staff",
         sectionLabel: "상단 수행원석",
-        number: index + 1,
-        x: 530 + (720 * index) / 13,
+        staffTableId: table.id,
+        number: tableIndex * 2 + seatIndex + 1,
+        x: table.x + table.width * (seatIndex === 0 ? .29 : .71),
         y: 142,
         direction: "down",
-        width: 50,
+        width: 44,
         height: 36,
-      })),
+      }))),
     ]),
   });
 
@@ -115,10 +149,20 @@
 
   const uniqueSeatIds = new Set(roomTemplate.seats.map((seat) => seat.id));
   const monitorSeats = roomTemplate.seats.filter((seat) => !seat.section.startsWith("staff"));
+  const staffSeatIds = new Set(roomTemplate.seats.filter((seat) => seat.section === "staff").map((seat) => seat.id));
+  const groupedStaffSeatIds = roomTemplate.geometry.staffTables.flatMap((table) => table.seatIds);
+  const mainTableGeometry = roomTemplate.geometry.mainTable;
   const midpoint = .5;
   if (
     uniqueSeatIds.size !== 63 ||
     monitorSeats.length !== 49 ||
+    roomTemplate.geometry.staffTables.length !== 7 ||
+    roomTemplate.geometry.staffTables.some((table) => table.seatIds.length !== 2 || table.depth !== mmToUnits(800)) ||
+    groupedStaffSeatIds.length !== 14 ||
+    groupedStaffSeatIds.some((seatId) => !staffSeatIds.has(seatId)) ||
+    new Set(groupedStaffSeatIds).size !== 14 ||
+    mainTableGeometry.depth !== mmToUnits(800) ||
+    mainTableGeometry.screenWallFaceX - (mainTableGeometry.xEnd + mainTableGeometry.depth / 2) !== mainTableGeometry.screenEndClearance ||
     upperTableY(midpoint) >= upperTableY(0) ||
     lowerTableY(midpoint) <= lowerTableY(0) ||
     roomTemplate.seats.filter((seat) => seat.section === "staff").some((seat) => seat.y > 220)
@@ -330,21 +374,41 @@
     const upperPath = `M${table.xStart} ${table.upperBaseY} Q${(table.xStart + table.xEnd) / 2} ${upperControlY} ${table.xEnd} ${table.upperBaseY}`;
     const lowerPath = `M${table.xStart} ${table.lowerBaseY} Q${(table.xStart + table.xEnd) / 2} ${lowerControlY} ${table.xEnd} ${table.lowerBaseY}`;
     const connectorPath = `M${table.connectorX} ${table.upperBaseY} L${table.connectorX} ${table.lowerBaseY}`;
-    const tableGroup = svgNode("g", { id: "main-table", filter: "url(#softShadow)" });
-    for (const path of [upperPath, lowerPath, connectorPath]) {
+    const tableGroup = svgNode("g", {
+      id: "main-table",
+      filter: "url(#softShadow)",
+      "data-long-edge-depth-mm": 800,
+      "data-screen-clearance-mm": 1000,
+      "data-units-per-meter": geometry.unitsPerMeter,
+    });
+    for (const path of [upperPath, lowerPath]) {
       tableGroup.append(
-        svgNode("path", { d: path, fill: "none", stroke: "#492316", "stroke-width": table.thickness + 12, "stroke-linecap": "round" }),
-        svgNode("path", { d: path, fill: "none", stroke: "url(#tableWood)", "stroke-width": table.thickness, "stroke-linecap": "round" }),
+        svgNode("path", { d: path, fill: "none", stroke: "#492316", "stroke-width": table.depth + 12, "stroke-linecap": "round" }),
+        svgNode("path", { d: path, fill: "none", stroke: "url(#tableWood)", "stroke-width": table.depth, "stroke-linecap": "round" }),
       );
     }
+    tableGroup.append(
+      svgNode("path", { d: connectorPath, fill: "none", stroke: "#492316", "stroke-width": table.connectorDepth + 12, "stroke-linecap": "round" }),
+      svgNode("path", { d: connectorPath, fill: "none", stroke: "url(#tableWood)", "stroke-width": table.connectorDepth, "stroke-linecap": "round", "data-measurement-status": "unmeasured" }),
+    );
     elements.fixtureLayer.append(tableGroup);
 
-    const staff = geometry.staffTable;
-    elements.fixtureLayer.append(
-      svgNode("rect", { x: staff.x, y: staff.y, width: staff.width, height: staff.height, rx: 5, fill: "#4a2418", opacity: .96 }),
-      svgNode("rect", { x: staff.x + 5, y: staff.y + 5, width: staff.width - 10, height: staff.height - 10, rx: 3, fill: "url(#tableWood)" }),
-      svgNode("text", { x: staff.x + staff.width / 2, y: staff.y + staff.height / 2 + 5, "text-anchor": "middle", "font-size": 13, "font-weight": 800, fill: "#f4e9df", class: "svg-label" }, "수행원석 · 14"),
-    );
+    const staffGroup = svgNode("g", { id: "staff-tables", filter: "url(#softShadow)", "data-module-count": geometry.staffTables.length, "data-module-depth-mm": 800 });
+    for (const [index, staffTable] of geometry.staffTables.entries()) {
+      const module = svgNode("g", {
+        "data-staff-table-id": staffTable.id,
+        "data-seat-ids": staffTable.seatIds.join(","),
+        "data-depth-mm": 800,
+      });
+      module.append(
+        svgNode("rect", { x: staffTable.x, y: staffTable.y, width: staffTable.width, height: staffTable.depth, rx: 4, fill: "#4a2418" }),
+        svgNode("rect", { x: staffTable.x + 4, y: staffTable.y + 4, width: staffTable.width - 8, height: staffTable.depth - 8, rx: 2, fill: "url(#tableWood)" }),
+        svgNode("path", { d: `M${staffTable.x + staffTable.width / 2} ${staffTable.y + 7}v${staffTable.depth - 14}`, stroke: "#5a2c1c", "stroke-width": 1.5, opacity: .82 }),
+        svgNode("text", { x: staffTable.x + staffTable.width / 2, y: staffTable.y + staffTable.depth / 2 + 5, "text-anchor": "middle", "font-size": 11, "font-weight": 800, fill: "#f4e9df", class: "svg-label" }, `T${index + 1}`),
+      );
+      staffGroup.append(module);
+    }
+    elements.fixtureLayer.append(staffGroup);
 
     const screen = geometry.screen;
     elements.fixtureLayer.append(

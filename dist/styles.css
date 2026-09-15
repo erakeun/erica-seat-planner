@@ -240,12 +240,13 @@ h1, h2, p { margin-top: 0; }
 }
 
 @media print {
-  @page { size: A3 landscape; margin: 10mm; }
+  @page { size: A4 landscape; margin: 10mm; }
   :root, body { background: #fff; }
   .topbar, .event-strip, .attendee-panel, .planner-toolbar, .output-actions, .statusbar, .toast-region, .canvas-tip { display: none !important; }
   .app-shell, .workspace, .planner-panel { display: block; min-height: 0; padding: 0; border: 0; box-shadow: none; }
   .planner-panel { overflow: visible; }
   .print-heading { display: block !important; padding-top: 0; }
-  .room-viewport { height: 166mm; min-height: 0; overflow: visible; background: #fff; }
+  .output-mode .print-heading { margin-top: 8mm; }
+  .room-viewport, .output-mode .room-viewport { height: 145mm; min-height: 0; overflow: visible; background: #fff; }
   #room-svg { height: 100%; }
 }
