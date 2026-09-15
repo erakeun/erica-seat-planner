@@ -777,6 +777,21 @@
     $("#tab-all-count").textContent = state.attendees.length;
   }
 
+  function nameplatePeople() {
+    return state.attendees
+      .map((attendee) => ({ name: attendee.name, organization: attendee.org || institutionById(attendee.institutionId)?.name || "", position: attendee.title, logoKey: "none" }))
+      .filter((person) => person.name || person.organization || person.position);
+  }
+
+  function renderNameplateAction() {
+    const people = nameplatePeople();
+    const button = $("#nameplate-button");
+    const message = people.length ? `${people.length}명 전송 준비` : "전송할 참석자가 없습니다.";
+    button.disabled = people.length === 0;
+    button.title = people.length ? "참석자 정보로 명패를 만듭니다." : message;
+    $("#nameplate-action-help").textContent = message;
+  }
+
   function renderSelected() {
     const attendee = attendeeById(selectedAttendeeId);
     elements.selectedCard.hidden = !attendee;
@@ -800,6 +815,7 @@
     renderSeats();
     renderAttendees();
     renderCounts();
+    renderNameplateAction();
     renderSelected();
     renderUndoRedo();
     renderPrintHeading();
@@ -1683,9 +1699,7 @@
   }
 
   function openNameplateMaker() {
-    const people = state.attendees
-      .map((attendee) => ({ name: attendee.name, organization: attendee.org || institutionById(attendee.institutionId)?.name || "", position: attendee.title, logoKey: "none" }))
-      .filter((person) => person.name || person.organization || person.position);
+    const people = nameplatePeople();
     if (!people.length) {
       toast("명패로 보낼 참석자가 없습니다.", true);
       return;

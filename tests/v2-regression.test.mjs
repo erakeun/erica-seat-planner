@@ -59,3 +59,14 @@ test("nameplate handoff keeps personal data out of URLs and uses an origin-bound
   assert.match(handoff, /transferId: crypto\.randomUUID\(\)/);
   assert.doesNotMatch(handoff, /URLSearchParams|location\.search|encodeURIComponent\(.*people/);
 });
+
+test("nameplate is a visible primary action with canonical disabled-state data", () => {
+  assert.match(html, /class="button nameplate-action" id="nameplate-button"/);
+  assert.match(html, /id="nameplate-action-help"/);
+  const actionState = declaration("renderNameplateAction");
+  assert.match(actionState, /const people = nameplatePeople\(\)/);
+  assert.match(actionState, /button\.disabled = people\.length === 0/);
+  assert.match(actionState, /전송할 참석자가 없습니다/);
+  const handoff = declaration("openNameplateMaker");
+  assert.match(handoff, /const people = nameplatePeople\(\)/);
+});
