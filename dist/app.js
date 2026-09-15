@@ -2,63 +2,97 @@
   "use strict";
 
   const STORAGE_KEY = "erica-seat-planner:v1";
-  const FULL_VIEW = { x: 0, y: 0, width: 1400, height: 1000, zoom: 1 };
+  const SCENE = { width: 1600, height: 900 };
+  const FULL_VIEW = { x: 0, y: 0, width: SCENE.width, height: SCENE.height, zoom: 1 };
   const GROUP_COLORS = ["#1268b3", "#7b4ca0", "#b55725", "#2b7a65", "#8f3e55", "#556b2f"];
+  const curveBow = (t) => 4 * t * (1 - t);
+  const upperTableY = (t) => 390 - 24 * curveBow(t);
+  const lowerTableY = (t) => 640 + 24 * curveBow(t);
 
   const roomTemplate = Object.freeze({
     id: "prime-conference-hall",
     name: "PRIME Conference Hall",
     areaReference: "252.19㎡",
+    displayMapping: Object.freeze({
+      "main-left": "main-upper",
+      "main-right": "main-lower",
+      head: "left-head",
+      staff: "upper-staff",
+    }),
+    geometry: Object.freeze({
+      scene: SCENE,
+      roomPath: "M430 72 H1490 V828 H72 V286 H218 V244 H430 Z",
+      corridorPath: "M40 45 H430 V244 H218 V286 H40 Z",
+      doors: Object.freeze([
+        { id: "door-1", label: "출입문 1", x: 430, y: 157, orientation: "vertical" },
+        { id: "door-2", label: "출입문 2", x: 302, y: 244, orientation: "horizontal" },
+      ]),
+      mainTable: Object.freeze({
+        xStart: 300,
+        xEnd: 1320,
+        upperBaseY: 390,
+        lowerBaseY: 640,
+        upperCurveDepth: 24,
+        lowerCurveDepth: 24,
+        connectorX: 300,
+        thickness: 54,
+      }),
+      staffTable: Object.freeze({ x: 505, y: 195, width: 770, height: 54 }),
+      screen: Object.freeze({ x: 1447, y: 450, width: 24, height: 205 }),
+      pc: Object.freeze({ x: 1370, y: 150, width: 88, height: 82 }),
+      planters: Object.freeze([{ x: 710, y: 515 }, { x: 1010, y: 515 }]),
+      windows: Object.freeze({ x: 230, y: 805, width: 1110, panes: 6 }),
+    }),
     seats: Object.freeze([
       ...Array.from({ length: 24 }, (_, index) => ({
         id: `MAIN-L-${String(index + 1).padStart(2, "0")}`,
         section: "main-left",
-        sectionLabel: "메인 왼쪽",
+        displaySection: "main-upper",
+        sectionLabel: "상단 메인석 · 벽체 측",
         number: index + 1,
-        x: 410 + Math.sin((index / 23) * Math.PI) * 34,
-        y: 246 + index * 26.1,
-        width: 132,
-        height: 23,
+        t: index / 23,
+        x: 350 + (945 * index) / 23,
+        y: upperTableY(index / 23) - 69,
+        direction: "down",
+        width: 38,
+        height: 38,
       })),
       ...Array.from({ length: 24 }, (_, index) => ({
         id: `MAIN-R-${String(index + 1).padStart(2, "0")}`,
         section: "main-right",
-        sectionLabel: "메인 오른쪽",
+        displaySection: "main-lower",
+        sectionLabel: "하단 메인석 · 창가 측",
         number: index + 1,
-        x: 990 - Math.sin((index / 23) * Math.PI) * 34,
-        y: 246 + index * 26.1,
-        width: 132,
-        height: 23,
+        t: index / 23,
+        x: 350 + (945 * index) / 23,
+        y: lowerTableY(index / 23) + 69,
+        direction: "up",
+        width: 38,
+        height: 38,
       })),
       {
         id: "HEAD-01",
         section: "head",
-        sectionLabel: "중앙 상석",
+        displaySection: "left-head",
+        sectionLabel: "왼쪽 중앙석",
         number: 1,
-        x: 700,
-        y: 139,
-        width: 174,
-        height: 38,
+        x: 220,
+        y: 515,
+        direction: "right",
+        width: 60,
+        height: 48,
       },
-      ...Array.from({ length: 7 }, (_, index) => ({
+      ...Array.from({ length: 14 }, (_, index) => ({
         id: `STAFF-${String(index + 1).padStart(2, "0")}`,
-        section: "staff-left",
-        sectionLabel: "수행원 왼쪽",
+        section: "staff",
+        displaySection: "upper-staff",
+        sectionLabel: "상단 수행원석",
         number: index + 1,
-        x: 175,
-        y: 270 + index * 88,
-        width: 130,
-        height: 40,
-      })),
-      ...Array.from({ length: 7 }, (_, index) => ({
-        id: `STAFF-${String(index + 8).padStart(2, "0")}`,
-        section: "staff-right",
-        sectionLabel: "수행원 오른쪽",
-        number: index + 8,
-        x: 1225,
-        y: 270 + index * 88,
-        width: 130,
-        height: 40,
+        x: 530 + (720 * index) / 13,
+        y: 142,
+        direction: "down",
+        width: 50,
+        height: 36,
       })),
     ]),
   });
@@ -79,6 +113,19 @@
     throw new Error("PRIME 홀 좌석 Geometry 검증 실패");
   }
 
+  const uniqueSeatIds = new Set(roomTemplate.seats.map((seat) => seat.id));
+  const monitorSeats = roomTemplate.seats.filter((seat) => !seat.section.startsWith("staff"));
+  const midpoint = .5;
+  if (
+    uniqueSeatIds.size !== 63 ||
+    monitorSeats.length !== 49 ||
+    upperTableY(midpoint) >= upperTableY(0) ||
+    lowerTableY(midpoint) <= lowerTableY(0) ||
+    roomTemplate.seats.filter((seat) => seat.section === "staff").some((seat) => seat.y > 220)
+  ) {
+    throw new Error("PRIME 홀 가로형 Geometry 방향 또는 수량 검증 실패");
+  }
+
   const defaultState = () => ({
     schemaVersion: 1,
     roomTemplateId: roomTemplate.id,
@@ -94,6 +141,7 @@
     settings: { showSeatNumbers: true, mode: "edit" },
   });
 
+  const seatById = new Map(roomTemplate.seats.map((seat) => [seat.id, seat]));
   let state = loadState();
   let selectedAttendeeId = null;
   let attendeeFilter = "unassigned";
@@ -107,12 +155,13 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const seatById = new Map(roomTemplate.seats.map((seat) => [seat.id, seat]));
 
   const elements = {
     shell: $("#app-shell"),
     roomSvg: $("#room-svg"),
     roomViewport: $("#room-viewport"),
+    roomShell: $("#room-shell"),
+    fixtureLayer: $("#fixture-layer"),
     seatLayer: $("#seat-layer"),
     attendeeList: $("#attendee-list"),
     selectedCard: $("#selected-card"),
@@ -195,8 +244,14 @@
     clearTimeout(saveTimer);
     $("#save-status").textContent = "저장 중…";
     $(".save-dot").style.background = "#c38a24";
-    saveTimer = setTimeout(() => {
+    try {
       localStorage.setItem(STORAGE_KEY, snapshot());
+    } catch {
+      $("#save-status").textContent = "저장 실패";
+      $(".save-dot").style.background = "#b52f39";
+      return;
+    }
+    saveTimer = setTimeout(() => {
       $("#save-status").textContent = "자동저장됨";
       $(".save-dot").style.background = "#178459";
     }, 260);
@@ -234,12 +289,117 @@
     return node;
   }
 
+  function renderRoom() {
+    const geometry = roomTemplate.geometry;
+    const table = geometry.mainTable;
+    elements.roomShell.replaceChildren();
+    elements.fixtureLayer.replaceChildren();
+    elements.roomShell.setAttribute("pointer-events", "none");
+    elements.fixtureLayer.setAttribute("pointer-events", "none");
+
+    elements.roomShell.append(
+      svgNode("rect", { x: 18, y: 18, width: 1564, height: 864, rx: 18, fill: "#30363c" }),
+      svgNode("path", { d: geometry.roomPath, fill: "url(#roomFloor)", stroke: "#171c21", "stroke-width": 12, "stroke-linejoin": "round" }),
+      svgNode("path", { d: geometry.corridorPath, fill: "#3b4147", stroke: "#171c21", "stroke-width": 12, "stroke-linejoin": "round" }),
+      svgNode("text", { x: 214, y: 145, "text-anchor": "middle", "font-size": 18, "font-weight": 800, fill: "#f0f3f5", class: "svg-label" }, "복도"),
+      svgNode("text", { x: 214, y: 168, "text-anchor": "middle", "font-size": 11, fill: "#c8d0d6", class: "svg-label" }, "CORRIDOR"),
+    );
+
+    for (const door of geometry.doors) {
+      const group = svgNode("g", { "data-door-id": door.id });
+      if (door.orientation === "vertical") {
+        group.append(
+          svgNode("path", { d: `M${door.x} ${door.y - 43}v86`, stroke: "#f2efe7", "stroke-width": 15 }),
+          svgNode("path", { d: `M${door.x} ${door.y - 43}h-58`, stroke: "#7f684d", "stroke-width": 7 }),
+          svgNode("path", { d: `M${door.x} ${door.y - 43}a58 58 0 0 0-58 58`, fill: "none", stroke: "#9b8d7a", "stroke-width": 2, "stroke-dasharray": "5 4" }),
+          svgNode("text", { x: door.x + 17, y: door.y + 3, "font-size": 13, "font-weight": 800, fill: "#554d44", class: "svg-label" }, door.label),
+        );
+      } else {
+        group.append(
+          svgNode("path", { d: `M${door.x - 50} ${door.y}h100`, stroke: "#f2efe7", "stroke-width": 15 }),
+          svgNode("path", { d: `M${door.x - 50} ${door.y}v-48M${door.x + 50} ${door.y}v-48`, stroke: "#7f684d", "stroke-width": 7 }),
+          svgNode("path", { d: `M${door.x - 50} ${door.y}a50 50 0 0 1 50-50M${door.x + 50} ${door.y}a50 50 0 0 0-50-50`, fill: "none", stroke: "#9b8d7a", "stroke-width": 2, "stroke-dasharray": "5 4" }),
+          svgNode("text", { x: door.x, y: door.y + 35, "text-anchor": "middle", "font-size": 13, "font-weight": 800, fill: "#554d44", class: "svg-label" }, door.label),
+        );
+      }
+      elements.roomShell.append(group);
+    }
+
+    const upperControlY = table.upperBaseY - table.upperCurveDepth * 2;
+    const lowerControlY = table.lowerBaseY + table.lowerCurveDepth * 2;
+    const upperPath = `M${table.xStart} ${table.upperBaseY} Q${(table.xStart + table.xEnd) / 2} ${upperControlY} ${table.xEnd} ${table.upperBaseY}`;
+    const lowerPath = `M${table.xStart} ${table.lowerBaseY} Q${(table.xStart + table.xEnd) / 2} ${lowerControlY} ${table.xEnd} ${table.lowerBaseY}`;
+    const connectorPath = `M${table.connectorX} ${table.upperBaseY} L${table.connectorX} ${table.lowerBaseY}`;
+    const tableGroup = svgNode("g", { id: "main-table", filter: "url(#softShadow)" });
+    for (const path of [upperPath, lowerPath, connectorPath]) {
+      tableGroup.append(
+        svgNode("path", { d: path, fill: "none", stroke: "#492316", "stroke-width": table.thickness + 12, "stroke-linecap": "round" }),
+        svgNode("path", { d: path, fill: "none", stroke: "url(#tableWood)", "stroke-width": table.thickness, "stroke-linecap": "round" }),
+      );
+    }
+    elements.fixtureLayer.append(tableGroup);
+
+    const staff = geometry.staffTable;
+    elements.fixtureLayer.append(
+      svgNode("rect", { x: staff.x, y: staff.y, width: staff.width, height: staff.height, rx: 5, fill: "#4a2418", opacity: .96 }),
+      svgNode("rect", { x: staff.x + 5, y: staff.y + 5, width: staff.width - 10, height: staff.height - 10, rx: 3, fill: "url(#tableWood)" }),
+      svgNode("text", { x: staff.x + staff.width / 2, y: staff.y + staff.height / 2 + 5, "text-anchor": "middle", "font-size": 13, "font-weight": 800, fill: "#f4e9df", class: "svg-label" }, "수행원석 · 14"),
+    );
+
+    const screen = geometry.screen;
+    elements.fixtureLayer.append(
+      svgNode("rect", { x: screen.x, y: screen.y, width: screen.width, height: screen.height, rx: 4, fill: "#132a44" }),
+      svgNode("rect", { x: screen.x + 5, y: screen.y + 13, width: screen.width - 10, height: screen.height - 26, rx: 2, fill: "#edf5f8" }),
+      svgNode("text", { x: screen.x - 10, y: screen.y + screen.height / 2, transform: `rotate(-90 ${screen.x - 10} ${screen.y + screen.height / 2})`, "text-anchor": "middle", "font-size": 14, "font-weight": 800, fill: "#183d60", class: "svg-label" }, "스크린"),
+    );
+
+    const pc = geometry.pc;
+    elements.fixtureLayer.append(
+      svgNode("rect", { x: pc.x, y: pc.y, width: pc.width, height: pc.height, rx: 7, fill: "#734229", stroke: "#4a2418", "stroke-width": 4 }),
+      svgNode("rect", { x: pc.x + 24, y: pc.y + 12, width: 42, height: 28, rx: 3, fill: "#26323c" }),
+      svgNode("rect", { x: pc.x + 34, y: pc.y + 48, width: 23, height: 21, rx: 5, fill: "#202830" }),
+      svgNode("text", { x: pc.x - 8, y: pc.y + pc.height / 2 + 5, "text-anchor": "end", "font-size": 14, "font-weight": 800, fill: "#4d6173", class: "svg-label" }, "PC"),
+    );
+
+    for (const planter of geometry.planters) {
+      const group = svgNode("g", { transform: `translate(${planter.x} ${planter.y})`, class: "planter" });
+      group.append(
+        svgNode("ellipse", { cx: 0, cy: 17, rx: 38, ry: 16, fill: "#653522" }),
+        svgNode("ellipse", { cx: 0, cy: 0, rx: 38, ry: 16, fill: "#7d4b35" }),
+        svgNode("circle", { cx: -20, cy: -4, r: 16, fill: "#5a743f" }),
+        svgNode("circle", { cx: 0, cy: -13, r: 19, fill: "#6f8e4c" }),
+        svgNode("circle", { cx: 21, cy: -3, r: 16, fill: "#4f6c39" }),
+      );
+      elements.fixtureLayer.append(group);
+    }
+
+    const windows = geometry.windows;
+    const paneWidth = windows.width / windows.panes;
+    const windowGroup = svgNode("g", { id: "window-wall" });
+    windowGroup.append(svgNode("path", { d: `M${windows.x} ${windows.y}h${windows.width}`, stroke: "#aeb8bb", "stroke-width": 12, "stroke-linecap": "round" }));
+    for (let index = 0; index < windows.panes; index += 1) {
+      windowGroup.append(svgNode("rect", { x: windows.x + index * paneWidth + 4, y: windows.y - 7, width: paneWidth - 8, height: 14, rx: 2, fill: "#cfe6ec", stroke: "#81999f" }));
+    }
+    windowGroup.append(svgNode("text", { x: windows.x + windows.width / 2, y: windows.y + 34, "text-anchor": "middle", "font-size": 14, "font-weight": 800, fill: "#66747d", class: "svg-label" }, "창가 · WINDOW"));
+    elements.fixtureLayer.append(windowGroup);
+
+    elements.fixtureLayer.append(
+      svgNode("text", { x: 345, y: 290, "font-size": 12, "font-weight": 800, fill: "#7b6e62", class: "svg-label" }, "상단 메인석 · 벽체 측 · 24"),
+      svgNode("text", { x: 345, y: 765, "font-size": 12, "font-weight": 800, fill: "#7b6e62", class: "svg-label" }, "하단 메인석 · 창가 측 · 24"),
+      svgNode("text", { x: 184, y: 572, "text-anchor": "middle", "font-size": 12, "font-weight": 800, fill: "#7b6e62", class: "svg-label" }, "중앙석 · 1"),
+      svgNode("text", { x: 92, y: 853, "font-size": 10, fill: "#8b8479", class: "svg-label" }, "PRIME CONFERENCE HALL · 화면 기준 평면"),
+      svgNode("text", { x: 1490, y: 853, "text-anchor": "end", "font-size": 10, fill: "#8b8479", class: "svg-label" }, "252.19㎡ · 면적 참고"),
+    );
+  }
+
   function renderSeats() {
     elements.seatLayer.replaceChildren();
     for (const seat of roomTemplate.seats) {
       const attendee = attendeeById(state.assignments[seat.id]);
       const isStaff = seat.section.startsWith("staff");
       const isHead = seat.section === "head";
+      const isUpper = seat.direction === "down";
+      const isLower = seat.direction === "up";
       const group = svgNode("g", {
         class: `seat-group${selectedAttendeeId && attendee?.id === selectedAttendeeId ? " selected" : ""}`,
         transform: `translate(${seat.x - seat.width / 2} ${seat.y - seat.height / 2})`,
@@ -251,67 +411,81 @@
           : `${seat.id}, 빈 좌석`,
       });
 
-      const border = attendee ? colorFor(attendee) : isStaff ? "#75808b" : isHead ? "#b98a39" : "#a8b1ba";
-      const fill = attendee ? "#ffffff" : isStaff ? "#eef0f2" : "#f9fafb";
+      const border = attendee ? colorFor(attendee) : isStaff ? "#5e6973" : isHead ? "#b98a39" : "#49545e";
+      const fill = attendee ? "#ffffff" : isStaff ? "#35414b" : "#28343e";
       group.append(svgNode("rect", {
         class: "seat-hit",
         x: 0,
         y: 0,
         width: seat.width,
         height: seat.height,
-        rx: isHead ? 8 : 5,
+        rx: isHead ? 9 : 6,
         fill,
         stroke: border,
         "stroke-width": attendee ? 2.2 : 1.2,
       }));
 
       if (attendee) {
-        group.append(svgNode("rect", { x: 0, y: 0, width: 5, height: seat.height, rx: 3, fill: border }));
+        const accent = isLower
+          ? { x: 0, y: seat.height - 5, width: seat.width, height: 5 }
+          : isHead
+            ? { x: 0, y: 0, width: 5, height: seat.height }
+            : { x: 0, y: 0, width: seat.width, height: 5 };
+        group.append(svgNode("rect", { ...accent, rx: 3, fill: border }));
+      } else {
+        const back = isLower
+          ? { x: 3, y: seat.height - 8, width: seat.width - 6, height: 6 }
+          : isHead
+            ? { x: 2, y: 3, width: 7, height: seat.height - 6 }
+            : { x: 3, y: 2, width: seat.width - 6, height: 6 };
+        group.append(svgNode("rect", { ...back, rx: 2, fill: "#111a22", opacity: .78 }));
       }
 
       if (!isStaff) {
-        const monitorX = seat.section === "main-right" ? 4 : seat.width - 16;
-        group.append(svgNode("rect", {
-          x: monitorX,
-          y: seat.height / 2 - 5,
-          width: 12,
-          height: 10,
-          rx: 1.5,
-          fill: attendee ? "#203040" : "#3d4751",
-          opacity: attendee ? .85 : .55,
-        }));
-        const micX = seat.section === "main-right" ? seat.width - 7 : 7;
-        group.append(svgNode("path", {
-          d: `M${micX} ${seat.height - 3} q0 -7 ${seat.section === "main-right" ? -6 : 6} -9`,
-          fill: "none",
-          stroke: "#29333c",
-          "stroke-width": 1.2,
-          opacity: .65,
-        }));
+        const monitorGroup = svgNode("g", { "data-monitor-seat-id": seat.id });
+        if (isHead) {
+          monitorGroup.append(
+            svgNode("rect", { x: seat.width + 28, y: seat.height / 2 - 11, width: 10, height: 22, rx: 2, fill: "#111a22", stroke: "#75808b" }),
+            svgNode("path", { d: `M${seat.width + 26} ${seat.height / 2}h-8`, stroke: "#5e6871", "stroke-width": 2 }),
+            svgNode("path", { d: `M${seat.width + 17} ${seat.height / 2 + 8}q8 0 8-7`, fill: "none", stroke: "#35414a", "stroke-width": 1.3 }),
+          );
+        } else {
+          const monitorY = isUpper ? seat.height + 25 : -34;
+          const standY = isUpper ? monitorY + 13 : monitorY + 18;
+          const angle = (seat.t - .5) * (isUpper ? 6 : -6);
+          monitorGroup.setAttribute("transform", `rotate(${angle} ${seat.width / 2} ${monitorY + 9})`);
+          monitorGroup.append(
+            svgNode("rect", { x: seat.width / 2 - 11, y: monitorY, width: 22, height: 13, rx: 2, fill: "#111a22", stroke: "#75808b", "stroke-width": 1 }),
+            svgNode("path", { d: `M${seat.width / 2} ${monitorY + 13}v5`, stroke: "#5e6871", "stroke-width": 2 }),
+            svgNode("path", { d: `M${seat.width / 2 - 6} ${standY}h12`, stroke: "#5e6871", "stroke-width": 2 }),
+            svgNode("path", { d: isUpper ? `M${seat.width / 2 + 14} ${monitorY + 13}q7 6 0 12` : `M${seat.width / 2 + 14} ${monitorY + 8}q7-6 0-12`, fill: "none", stroke: "#35414a", "stroke-width": 1.2 }),
+          );
+        }
+        group.append(monitorGroup);
       }
 
       const textAnchor = "middle";
       const centerX = seat.width / 2;
       if (attendee) {
-        const nameY = isStaff || isHead ? seat.height / 2 - 3 : seat.height / 2 + 3.5;
+        const nameY = seat.height / 2 + (isHead ? -2 : 3);
         group.append(svgNode("text", {
           class: "seat-text",
           x: centerX,
           y: nameY,
           "text-anchor": textAnchor,
-          "font-size": isStaff || isHead ? 11.5 : 10.5,
+          "font-size": isStaff || isHead ? 9.5 : 8.5,
           "font-weight": 800,
           fill: "#12263a",
-        }, truncate(attendee.name, isStaff || isHead ? 12 : 10)));
-        if ((isStaff || isHead || view.zoom >= 1.38) && (attendee.org || attendee.title)) {
+        }, truncate(attendee.name, isStaff || isHead ? 8 : 5)));
+        if ((isStaff || isHead || view.zoom >= 1.6) && (attendee.org || attendee.title)) {
           group.append(svgNode("text", {
             class: "seat-text",
             x: centerX,
-            y: isStaff || isHead ? seat.height / 2 + 11 : seat.height - 2.4,
+            y: isStaff || isHead ? seat.height / 2 + 11 : seat.height - 4,
             "text-anchor": textAnchor,
             "font-size": 7.4,
             fill: "#687586",
-          }, truncate([attendee.org, attendee.title].filter(Boolean).join(" · "), isStaff || isHead ? 20 : 15)));
+          }, truncate([attendee.org, attendee.title].filter(Boolean).join(" · "), isStaff || isHead ? 12 : 7)));
         }
       } else {
         group.append(svgNode("text", {
@@ -319,9 +493,9 @@
           x: centerX,
           y: seat.height / 2 + 3.5,
           "text-anchor": textAnchor,
-          "font-size": isStaff ? 9 : 8.5,
+          "font-size": isStaff ? 7.4 : isHead ? 8.2 : 6.8,
           "font-weight": 700,
-          fill: "#74808b",
+          fill: "#e9eef2",
         }, state.settings.showSeatNumbers ? seat.id : "+"));
       }
 
@@ -685,19 +859,19 @@
   function clampView() {
     const paddingX = view.width * .2;
     const paddingY = view.height * .2;
-    view.x = Math.min(1400 - view.width + paddingX, Math.max(-paddingX, view.x));
-    view.y = Math.min(1000 - view.height + paddingY, Math.max(-paddingY, view.y));
+    view.x = Math.min(SCENE.width - view.width + paddingX, Math.max(-paddingX, view.x));
+    view.y = Math.min(SCENE.height - view.height + paddingY, Math.max(-paddingY, view.y));
   }
 
-  function zoomTo(nextZoom, anchorX = 700, anchorY = 500) {
+  function zoomTo(nextZoom, anchorX = SCENE.width / 2, anchorY = SCENE.height / 2) {
     const zoom = Math.min(2.4, Math.max(.72, nextZoom));
-    const worldAnchorX = view.x + (anchorX / 1400) * view.width;
-    const worldAnchorY = view.y + (anchorY / 1000) * view.height;
+    const worldAnchorX = view.x + (anchorX / SCENE.width) * view.width;
+    const worldAnchorY = view.y + (anchorY / SCENE.height) * view.height;
     view.zoom = zoom;
-    view.width = 1400 / zoom;
-    view.height = 1000 / zoom;
-    view.x = worldAnchorX - (anchorX / 1400) * view.width;
-    view.y = worldAnchorY - (anchorY / 1000) * view.height;
+    view.width = SCENE.width / zoom;
+    view.height = SCENE.height / zoom;
+    view.x = worldAnchorX - (anchorX / SCENE.width) * view.width;
+    view.y = worldAnchorY - (anchorY / SCENE.height) * view.height;
     clampView();
     updateViewBox();
     renderSeats();
@@ -848,32 +1022,32 @@
     try {
       const clone = elements.roomSvg.cloneNode(true);
       clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-      clone.setAttribute("viewBox", "0 0 1400 1000");
-      clone.setAttribute("width", "1680");
-      clone.setAttribute("height", "1200");
+      clone.setAttribute("viewBox", `0 0 ${SCENE.width} ${SCENE.height}`);
+      clone.setAttribute("width", "1920");
+      clone.setAttribute("height", "1080");
       const svgText = new XMLSerializer().serializeToString(clone);
       const image = new Image();
       image.decoding = "sync";
       image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
       await image.decode();
       const canvas = document.createElement("canvas");
-      canvas.width = 1680;
-      canvas.height = 1360;
+      canvas.width = 1920;
+      canvas.height = 1240;
       const context = canvas.getContext("2d");
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.fillStyle = "#1268b3";
       context.font = "700 18px sans-serif";
       context.textAlign = "center";
-      context.fillText("HANYANG UNIVERSITY ERICA", 840, 35);
+      context.fillText("HANYANG UNIVERSITY ERICA", 960, 35);
       context.fillStyle = "#182638";
       context.font = "700 36px sans-serif";
-      context.fillText(state.event.title || "PRIME 컨퍼런스홀 좌석배치", 840, 80);
+      context.fillText(state.event.title || "PRIME 컨퍼런스홀 좌석배치", 960, 80);
       context.fillStyle = "#687586";
       context.font = "20px sans-serif";
       const meta = [formatDate(state.event.date), state.event.organizations, state.event.location].filter(Boolean).join(" · ");
-      context.fillText(meta, 840, 116);
-      context.drawImage(image, 0, 160, 1680, 1200);
+      context.fillText(meta, 960, 116);
+      context.drawImage(image, 0, 160, 1920, 1080);
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
       if (!blob) throw new Error("png-encode-failed");
       downloadBlob(blob, safeFilename("png"));
@@ -953,8 +1127,8 @@
       if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       const rect = elements.roomSvg.getBoundingClientRect();
-      const anchorX = ((event.clientX - rect.left) / rect.width) * 1400;
-      const anchorY = ((event.clientY - rect.top) / rect.height) * 1000;
+      const anchorX = ((event.clientX - rect.left) / rect.width) * SCENE.width;
+      const anchorY = ((event.clientY - rect.top) / rect.height) * SCENE.height;
       zoomTo(view.zoom * (event.deltaY < 0 ? 1.12 : .89), anchorX, anchorY);
     }, { passive: false });
 
@@ -1112,6 +1286,7 @@
     bindControls();
     applyMode();
     updateViewBox();
+    renderRoom();
     renderAll();
     registerWebMcpTools();
   }
