@@ -34,6 +34,7 @@
           <div class="data-menu" id="data-menu" role="menu" hidden>
             <button type="button" data-action="json-export" role="menuitem">배치 데이터 JSON 내보내기</button>
             <button type="button" data-action="json-import" role="menuitem">JSON 다시 불러오기</button>
+            <button type="button" data-action="backup-export" role="menuitem">교체 전 백업 JSON 내려받기</button>
             <button type="button" data-action="csv-export" role="menuitem">참석자 명단 CSV 내보내기</button>
             <button type="button" data-action="csv-import" role="menuitem">CSV 명단 불러오기</button>
           </div>
@@ -204,7 +205,7 @@
         </div>
         <input id="attendee-id" type="hidden" />
         <div class="form-grid">
-          <label class="field full"><span>이름 *</span><input id="attendee-name" required autocomplete="off" /></label>
+          <label class="field full"><span>이름 *</span><input id="attendee-name" required maxlength="80" autocomplete="off" /></label>
           <label class="field"><span>소속</span><input id="attendee-org" autocomplete="organization" /></label>
           <label class="field"><span>직위</span><input id="attendee-title" /></label>
           <label class="field"><span>구분</span>
@@ -212,7 +213,7 @@
               <option>교내</option><option>외부</option><option>주요 참석자</option><option>수행원</option><option>기타</option>
             </select>
           </label>
-          <label class="field"><span>기관·그룹</span><input id="attendee-group" placeholder="예: 한양대학교" /></label>
+          <label class="field"><span>보조 그룹 (선택)</span><input id="attendee-group" maxlength="100" placeholder="예: 대표단 A · 기관은 아래에서 선택" /></label>
           <label class="field"><span>참여기관</span><select id="attendee-institution"><option value="">기관 없음</option></select></label>
           <label class="field"><span>기관 내 순위</span><input id="attendee-rank" type="number" min="1" step="1" placeholder="예: 1" /></label>
           <label class="field"><span>고정 좌석 ID</span><input id="attendee-fixed-seat" list="seat-id-list" placeholder="예: MAIN-R-12" /></label>
@@ -274,8 +275,10 @@
         <p class="modal-help">기관 내 숫자 순위를 기준으로 만든 운영 초안입니다. 의전 판단을 대신하지 않으며, 적용 전까지 현재 배정을 변경하지 않습니다.</p>
         <div id="auto-reference-list" class="reference-grid"></div>
         <div class="auto-options">
-          <label><input id="auto-include-head" type="checkbox" /> 중앙석 HEAD-01도 자동배치에 사용</label>
+          <label><input id="auto-include-head" type="checkbox" /> 중앙석 HEAD-01 배정</label>
+          <label>중앙석 참석자 <select id="auto-head-attendee"><option value="">직접 선택</option></select></label>
           <label><input id="auto-fill-staff" type="checkbox" checked /> 수행원 빈자리 자동배치</label>
+          <label><input id="auto-replace-existing" type="checkbox" /> 기존 배정 재계산 (고정석·중앙석 유지)</label>
         </div>
         <div class="validation-summary" id="auto-validation" aria-live="polite"></div>
         <div class="table-scroll"><table class="data-table"><thead><tr><th>상태</th><th>기관</th><th>참석자</th><th>좌석</th><th>근거</th></tr></thead><tbody id="auto-preview-body"></tbody></table></div>
