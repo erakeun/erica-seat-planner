@@ -186,8 +186,9 @@
       note: "",
     },
     attendees: [],
+    institutions: [],
     assignments: {},
-    settings: { showSeatNumbers: true, mode: "edit" },
+    settings: { showSeatNumbers: true, mode: "edit", includeHeadInAuto: false, autoFillStaff: true },
   });
 
   const seatById = new Map(roomTemplate.seats.map((seat) => [seat.id, seat]));
@@ -201,6 +202,9 @@
   let saveTimer = null;
   let dragCandidate = null;
   let panCandidate = null;
+  let bulkPreviewRows = [];
+  let bulkPreviewIssues = { errors: [], warnings: [] };
+  let autoDraft = null;
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -218,6 +222,9 @@
     attendeeDialog: $("#attendee-dialog"),
     resetDialog: $("#reset-dialog"),
     attendeeForm: $("#attendee-form"),
+    bulkDialog: $("#bulk-dialog"),
+    institutionsDialog: $("#institutions-dialog"),
+    autoLayoutDialog: $("#auto-layout-dialog"),
     dataMenu: $("#data-menu"),
     toastRegion: $("#toast-region"),
   };
@@ -234,6 +241,19 @@
 
   function sanitizeState(input) {
     const base = defaultState();
+    const institutions = Array.isArray(input.institutions)
+      ? input.institutions
+          .filter((item) => item && typeof item.id === "string")
+          .map((item, index) => ({
+            id: item.id,
+            name: String(item.name || "").slice(0, 120),
+            role: ["host", "counterparty", "other"].includes(item.role) ? item.role : "other",
+            displayOrder: Number.isInteger(Number(item.displayOrder)) ? Number(item.displayOrder) : index + 1,
+            referenceSeatId: seatById.has(item.referenceSeatId) && !staffSeatIds.has(item.referenceSeatId) ? item.referenceSeatId : "",
+            note: String(item.note || "").slice(0, 300),
+          }))
+      : [];
+    const institutionIds = new Set(institutions.map((item) => item.id));
     const attendees = Array.isArray(input.attendees)
       ? input.attendees
           .filter((item) => item && typeof item.id === "string" && typeof item.name === "string")
@@ -245,6 +265,10 @@
             type: String(item.type || "기타").slice(0, 40),
             group: String(item.group || "").slice(0, 100),
             note: String(item.note || "").slice(0, 500),
+            institutionId: institutionIds.has(item.institutionId) ? item.institutionId : "",
+            institutionRank: Number.isInteger(Number(item.institutionRank)) && Number(item.institutionRank) > 0 ? Number(item.institutionRank) : null,
+            fixedSeatId: seatById.has(item.fixedSeatId) ? item.fixedSeatId : "",
+            seatLocked: Boolean(item.seatLocked),
           }))
       : [];
     const attendeeIds = new Set(attendees.map((item) => item.id));
@@ -261,6 +285,7 @@
       roomTemplateId: roomTemplate.id,
       event: { ...base.event, ...(input.event || {}) },
       attendees,
+      institutions,
       assignments,
       settings: { ...base.settings, ...(input.settings || {}) },
     };
@@ -310,6 +335,14 @@
     return state.attendees.find((attendee) => attendee.id === id) || null;
   }
 
+  function institutionById(id) {
+    return state.institutions.find((institution) => institution.id === id) || null;
+  }
+
+  function institutionRoleLabel(role) {
+    return ({ host: "주최", counterparty: "상대기관", other: "기타" })[role] || "기타";
+  }
+
   function assignedSeatFor(attendeeId) {
     return Object.keys(state.assignments).find((seatId) => state.assignments[seatId] === attendeeId) || null;
   }
@@ -325,7 +358,7 @@
   }
 
   function colorFor(attendee) {
-    const source = attendee.group || attendee.org || attendee.type || attendee.name;
+    const source = institutionById(attendee.institutionId)?.name || attendee.group || attendee.org || attendee.type || attendee.name;
     let hash = 0;
     for (const char of source) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
     return GROUP_COLORS[hash % GROUP_COLORS.length];
@@ -633,6 +666,7 @@
 
     for (const attendee of attendees) {
       const seatId = assignedSeatFor(attendee.id);
+      const institution = institutionById(attendee.institutionId);
       const item = document.createElement("div");
       item.className = `attendee-item${selectedAttendeeId === attendee.id ? " selected" : ""}${seatId ? " assigned" : ""}`;
       item.dataset.attendeeId = attendee.id;
@@ -643,8 +677,8 @@
         <div class="avatar" style="background:${colorFor(attendee)}">${escapeHtml(getInitials(attendee.name))}</div>
         <div class="attendee-copy">
           <strong>${escapeHtml(attendee.name)}</strong>
-          <span>${escapeHtml([attendee.org, attendee.title].filter(Boolean).join(" · ") || attendee.type)}</span>
-          ${seatId ? `<em class="seat-chip">${escapeHtml(seatId)}</em>` : ""}
+          <span>${escapeHtml([institution?.name || attendee.org, attendee.title, attendee.institutionRank ? `기관 ${attendee.institutionRank}순위` : ""].filter(Boolean).join(" · ") || attendee.type)}</span>
+          ${seatId ? `<em class="seat-chip">${escapeHtml(seatId)}${attendee.seatLocked ? `<b class="lock-badge">고정</b>` : ""}</em>` : ""}
         </div>
         <div class="attendee-actions">
           <button class="mini-action" type="button" data-edit-attendee="${attendee.id}" aria-label="${escapeHtml(attendee.name)} 수정">•••</button>
@@ -685,7 +719,7 @@
     elements.selectedCard.hidden = !attendee;
     if (!attendee) return;
     $("#selected-name").textContent = attendee.name;
-    $("#selected-meta").textContent = [attendee.org, attendee.title, assignedSeatFor(attendee.id) || "미배정"].filter(Boolean).join(" · ");
+    $("#selected-meta").textContent = [institutionById(attendee.institutionId)?.name || attendee.org, attendee.title, assignedSeatFor(attendee.id) || "미배정", attendee.seatLocked ? "자리 고정" : ""].filter(Boolean).join(" · ");
   }
 
   function renderUndoRedo() {
@@ -725,6 +759,10 @@
       if (sourceSeatId) delete state.assignments[sourceSeatId];
       if (displacedAttendeeId && sourceSeatId) state.assignments[sourceSeatId] = displacedAttendeeId;
       state.assignments[targetSeatId] = attendeeId;
+      const moved = attendeeById(attendeeId);
+      if (moved?.seatLocked) moved.fixedSeatId = targetSeatId;
+      const displaced = attendeeById(displacedAttendeeId);
+      if (displaced?.seatLocked && sourceSeatId) displaced.fixedSeatId = sourceSeatId;
       selectedAttendeeId = attendeeId;
     }, displacedAttendeeId && sourceSeatId ? "두 좌석을 교환했습니다." : displacedAttendeeId ? "기존 참석자를 미배정으로 이동했습니다." : `${targetSeatId}에 배정했습니다.`);
   }
@@ -734,6 +772,11 @@
     if (!seatId) return;
     transact(() => {
       delete state.assignments[seatId];
+      const attendee = attendeeById(attendeeId);
+      if (attendee?.seatLocked) {
+        attendee.seatLocked = false;
+        attendee.fixedSeatId = "";
+      }
       selectedAttendeeId = attendeeId;
     }, "좌석 배정을 해제했습니다.");
   }
@@ -849,6 +892,14 @@
     }
   }
 
+  function populateInstitutionSelect(select, selectedId = "") {
+    select.replaceChildren(new Option("기관 없음", ""));
+    [...state.institutions]
+      .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name, "ko"))
+      .forEach((institution) => select.add(new Option(`${institution.name} · ${institutionRoleLabel(institution.role)}`, institution.id)));
+    select.value = selectedId;
+  }
+
   function openAttendeeDialog(attendeeId = null) {
     const attendee = attendeeById(attendeeId);
     $("#attendee-dialog-title").textContent = attendee ? "참석자 수정" : "참석자 추가";
@@ -858,6 +909,10 @@
     $("#attendee-title").value = attendee?.title || "";
     $("#attendee-type").value = attendee?.type || "교내";
     $("#attendee-group").value = attendee?.group || "";
+    populateInstitutionSelect($("#attendee-institution"), attendee?.institutionId || "");
+    $("#attendee-rank").value = attendee?.institutionRank || "";
+    $("#attendee-fixed-seat").value = attendee?.fixedSeatId || assignedSeatFor(attendee?.id) || "";
+    $("#attendee-locked").checked = Boolean(attendee?.seatLocked);
     $("#attendee-note").value = attendee?.note || "";
     $("#delete-attendee-button").hidden = !attendee;
     elements.attendeeDialog.showModal();
@@ -878,10 +933,44 @@
       type: $("#attendee-type").value,
       group: $("#attendee-group").value.trim(),
       note: $("#attendee-note").value.trim(),
+      institutionId: $("#attendee-institution").value,
+      institutionRank: $("#attendee-rank").value ? Number($("#attendee-rank").value) : null,
+      fixedSeatId: $("#attendee-fixed-seat").value.trim().toUpperCase(),
+      seatLocked: $("#attendee-locked").checked,
     };
+    if (values.institutionId && !values.group) values.group = institutionById(values.institutionId)?.name || "";
+    if (values.institutionRank !== null && (!Number.isInteger(values.institutionRank) || values.institutionRank < 1)) {
+      toast("기관 내 순위는 1 이상의 정수로 입력해 주세요.", true);
+      return;
+    }
+    if (values.fixedSeatId && !seatById.has(values.fixedSeatId)) {
+      toast("유효한 좌석 ID를 입력해 주세요.", true);
+      return;
+    }
+    if (values.seatLocked && !values.fixedSeatId) {
+      values.fixedSeatId = id ? assignedSeatFor(id) || "" : "";
+      if (!values.fixedSeatId) {
+        toast("자리 고정에는 고정 좌석 ID가 필요합니다.", true);
+        return;
+      }
+    }
+    const occupiedBy = values.fixedSeatId ? state.assignments[values.fixedSeatId] : null;
+    if (values.seatLocked && occupiedBy && occupiedBy !== id) {
+      toast(`${values.fixedSeatId} 좌석은 이미 사용 중입니다.`, true);
+      return;
+    }
     transact(() => {
+      let attendeeId = id;
       if (id) Object.assign(attendeeById(id), values);
-      else state.attendees.push({ id: crypto.randomUUID(), ...values });
+      else {
+        attendeeId = crypto.randomUUID();
+        state.attendees.push({ id: attendeeId, ...values });
+      }
+      if (values.seatLocked && values.fixedSeatId) {
+        const previousSeat = assignedSeatFor(attendeeId);
+        if (previousSeat) delete state.assignments[previousSeat];
+        state.assignments[values.fixedSeatId] = attendeeId;
+      }
     }, id ? "참석자 정보를 수정했습니다." : "참석자를 추가했습니다.");
     elements.attendeeDialog.close();
   }
@@ -902,7 +991,8 @@
   function syncEventInputs() {
     $("#event-title").value = state.event.title;
     $("#event-date").value = state.event.date;
-    $("#event-organizations").value = state.event.organizations;
+    const institutionSummary = [...state.institutions].sort((a, b) => a.displayOrder - b.displayOrder).map((item) => item.name).filter(Boolean).join(" · ");
+    $("#event-organizations").value = institutionSummary || state.event.organizations;
     $("#event-location").value = state.event.location;
     $("#event-note").value = state.event.note;
     $("#seat-number-toggle").checked = state.settings.showSeatNumbers;
@@ -1040,19 +1130,36 @@
   }
 
   function exportCsv() {
-    const headers = ["이름", "소속", "직위", "구분", "기관·그룹", "비고", "좌석ID"];
+    const headers = ["이름", "소속", "직위", "기관", "기관역할", "기관내순위", "좌석고정", "참석구분", "비고"];
     const rows = state.attendees.map((attendee) => [
       attendee.name,
       attendee.org,
       attendee.title,
+      institutionById(attendee.institutionId)?.name || attendee.group,
+      institutionRoleLabel(institutionById(attendee.institutionId)?.role),
+      attendee.institutionRank || "",
+      attendee.seatLocked ? attendee.fixedSeatId || assignedSeatFor(attendee.id) : "",
       attendee.type,
-      attendee.group,
       attendee.note,
-      assignedSeatFor(attendee.id) || "",
     ]);
     const csv = [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\r\n");
     downloadBlob(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }), safeFilename("csv"));
     toast("참석자 명단을 CSV로 내보냈습니다.");
+  }
+
+  const BULK_HEADERS = ["이름", "소속", "직위", "기관", "기관역할", "기관내순위", "좌석고정", "참석구분", "비고"];
+
+  function downloadExampleCsv() {
+    const rows = [
+      BULK_HEADERS,
+      ["가온", "대외협력팀", "팀장", "푸른대학교", "주최", "1", "MAIN-L-12", "주요 참석자", "예시 데이터"],
+      ["나래", "국제처", "처장", "푸른대학교", "주최", "2", "", "교내", ""],
+      ["다온", "전략기획실", "실장", "새봄연구원", "상대기관", "1", "", "외부", ""],
+      ["라온", "수행팀", "매니저", "새봄연구원", "상대기관", "", "STAFF-01", "수행원", ""],
+    ];
+    const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\r\n");
+    downloadBlob(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }), "PRIME_참석자_등록_예시.csv");
+    toast("UTF-8 BOM 예시 CSV를 저장했습니다.");
   }
 
   function parseCsv(text) {
@@ -1077,41 +1184,416 @@
     return rows;
   }
 
+  function roleFromCsv(value) {
+    const text = String(value || "").trim().toLowerCase();
+    if (["주최", "host"].includes(text)) return "host";
+    if (["상대기관", "상대", "counterparty", "guest"].includes(text)) return "counterparty";
+    return "other";
+  }
+
+  function normalizeBulkRows(rows) {
+    const headers = rows.shift().map((header) => header.trim().replace(/^\ufeff/, ""));
+    const aliases = {
+      name: ["이름", "성명", "name"], org: ["소속", "organization", "org"], title: ["직위", "직책", "title"],
+      institution: ["기관", "기관·그룹", "기관/그룹", "그룹", "group"], role: ["기관역할", "기관 역할", "role"],
+      rank: ["기관내순위", "기관 내 순위", "순위", "rank"], fixedSeat: ["좌석고정", "고정좌석", "좌석id", "좌석", "seat", "seatid"],
+      type: ["참석구분", "구분", "type"], note: ["비고", "note"],
+    };
+    const indexes = Object.fromEntries(Object.entries(aliases).map(([key, values]) => [key, headers.findIndex((header) => values.some((value) => value.toLowerCase() === header.toLowerCase()))]));
+    if (indexes.name < 0) throw new Error("name");
+    return rows.map((row) => ({
+      name: (row[indexes.name] || "").trim(),
+      org: indexes.org >= 0 ? (row[indexes.org] || "").trim() : "",
+      title: indexes.title >= 0 ? (row[indexes.title] || "").trim() : "",
+      institution: indexes.institution >= 0 ? (row[indexes.institution] || "").trim() : "",
+      role: indexes.role >= 0 ? (row[indexes.role] || "").trim() : "",
+      rank: indexes.rank >= 0 ? (row[indexes.rank] || "").trim() : "",
+      fixedSeat: indexes.fixedSeat >= 0 ? (row[indexes.fixedSeat] || "").trim().toUpperCase() : "",
+      type: indexes.type >= 0 ? (row[indexes.type] || "기타").trim() || "기타" : "기타",
+      note: indexes.note >= 0 ? (row[indexes.note] || "").trim() : "",
+    })).filter((row) => Object.values(row).some(Boolean));
+  }
+
+  function validateBulkRows() {
+    const errors = [];
+    const warnings = [];
+    const seatClaims = new Map();
+    const existingNames = new Set(state.attendees.map((a) => `${a.name}|${a.org}`.toLowerCase()));
+    const seenNames = new Set();
+    bulkPreviewRows.forEach((row, index) => {
+      const line = index + 2;
+      row._errors = [];
+      row._warnings = [];
+      if (!row.name.trim()) row._errors.push("이름 누락");
+      if (row.rank && (!/^\d+$/.test(row.rank) || Number(row.rank) < 1)) row._errors.push("기관 내 순위 오류");
+      if (row.fixedSeat && !seatById.has(row.fixedSeat)) row._errors.push("유효하지 않은 좌석 ID");
+      if (row.type === "수행원" && row.fixedSeat && !staffSeatIds.has(row.fixedSeat)) row._warnings.push("수행원에게 메인 좌석 지정");
+      if (row.fixedSeat) {
+        if (seatClaims.has(row.fixedSeat)) row._errors.push(`${seatClaims.get(row.fixedSeat)}행과 고정 좌석 중복`);
+        else seatClaims.set(row.fixedSeat, line);
+        const occupant = state.assignments[row.fixedSeat];
+        if (occupant) row._errors.push("현재 배정과 고정 좌석 충돌");
+      }
+      const identity = `${row.name}|${row.org}`.toLowerCase();
+      if (row.name && (existingNames.has(identity) || seenNames.has(identity))) row._warnings.push("중복 참석자 가능성");
+      if (row.name) seenNames.add(identity);
+      row._errors.forEach((message) => errors.push(`${line}행: ${message}`));
+      row._warnings.forEach((message) => warnings.push(`${line}행: ${message}`));
+    });
+    if (state.attendees.length + bulkPreviewRows.length > 63) errors.push("전체 참석자가 63명을 초과합니다.");
+    const staffCount = state.attendees.filter((a) => a.type === "수행원").length + bulkPreviewRows.filter((row) => row.type === "수행원").length;
+    if (staffCount > 14) errors.push("수행원 참석자가 14명을 초과합니다.");
+    bulkPreviewIssues = { errors, warnings };
+    return bulkPreviewIssues;
+  }
+
+  function renderBulkPreview() {
+    validateBulkRows();
+    $("#bulk-preview-head").innerHTML = `<tr><th>#</th>${BULK_HEADERS.map((header) => `<th>${header}</th>`).join("")}</tr>`;
+    const body = $("#bulk-preview-body");
+    body.replaceChildren();
+    bulkPreviewRows.forEach((row, index) => {
+      const tr = document.createElement("tr");
+      tr.className = row._errors.length ? "row-error" : row._warnings.length ? "row-warning" : "";
+      tr.innerHTML = `<td>${index + 1}</td>${[
+        ["name", ""], ["org", ""], ["title", ""], ["institution", ""], ["role", ""], ["rank", "narrow-input"], ["fixedSeat", "seat-input"], ["type", ""], ["note", ""],
+      ].map(([key, className]) => `<td><input class="${className}" data-bulk-row="${index}" data-bulk-key="${key}" value="${escapeHtml(row[key])}" aria-label="${BULK_HEADERS[["name","org","title","institution","role","rank","fixedSeat","type","note"].indexOf(key)]}" /></td>`).join("")}`;
+      body.append(tr);
+    });
+    const summary = $("#bulk-validation");
+    summary.className = `validation-summary${bulkPreviewIssues.errors.length ? " has-error" : bulkPreviewIssues.warnings.length ? " has-warning" : ""}`;
+    summary.textContent = bulkPreviewIssues.errors.length
+      ? `등록 불가 · ${bulkPreviewIssues.errors.join(" · ")}`
+      : bulkPreviewIssues.warnings.length
+        ? `확인 필요 · ${bulkPreviewIssues.warnings.join(" · ")}`
+        : bulkPreviewRows.length ? `${bulkPreviewRows.length}명 검증 완료` : "CSV 파일을 선택해 주세요.";
+    $("#bulk-register-button").disabled = !bulkPreviewRows.length || bulkPreviewIssues.errors.length > 0;
+    $("#bulk-register-auto-button").disabled = !bulkPreviewRows.length || bulkPreviewIssues.errors.length > 0;
+  }
+
+  function openBulkDialog() {
+    bulkPreviewRows = [];
+    $("#bulk-file-name").textContent = "파일을 선택하면 편집 가능한 미리보기가 표시됩니다.";
+    renderBulkPreview();
+    elements.bulkDialog.showModal();
+  }
+
   function importCsv(file) {
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const rows = parseCsv(String(reader.result).replace(/^\ufeff/, "")).filter((row) => row.some((field) => field.trim()));
         if (rows.length < 2) throw new Error("empty");
-        const headers = rows.shift().map((header) => header.trim());
-        const aliases = {
-          name: ["이름", "성명", "name"], org: ["소속", "기관", "organization", "org"], title: ["직위", "직책", "title"],
-          type: ["구분", "type"], group: ["기관·그룹", "기관/그룹", "그룹", "group"], note: ["비고", "note"], seat: ["좌석ID", "좌석", "seat", "seatid"],
-        };
-        const indexes = Object.fromEntries(Object.entries(aliases).map(([key, values]) => [key, headers.findIndex((header) => values.some((value) => value.toLowerCase() === header.toLowerCase()))]));
-        if (indexes.name < 0) throw new Error("name");
-        const imported = rows.map((row) => ({
-          id: crypto.randomUUID(),
-          name: (row[indexes.name] || "").trim(),
-          org: indexes.org >= 0 ? (row[indexes.org] || "").trim() : "",
-          title: indexes.title >= 0 ? (row[indexes.title] || "").trim() : "",
-          type: indexes.type >= 0 ? (row[indexes.type] || "기타").trim() || "기타" : "기타",
-          group: indexes.group >= 0 ? (row[indexes.group] || "").trim() : "",
-          note: indexes.note >= 0 ? (row[indexes.note] || "").trim() : "",
-          requestedSeat: indexes.seat >= 0 ? (row[indexes.seat] || "").trim() : "",
-        })).filter((attendee) => attendee.name);
-        if (!imported.length) throw new Error("empty");
-        transact(() => {
-          imported.forEach(({ requestedSeat, ...attendee }) => {
-            state.attendees.push(attendee);
-            if (requestedSeat && seatById.has(requestedSeat) && !state.assignments[requestedSeat]) state.assignments[requestedSeat] = attendee.id;
-          });
-        }, `${imported.length}명의 참석자를 불러왔습니다.`);
+        bulkPreviewRows = normalizeBulkRows(rows);
+        if (!bulkPreviewRows.length) throw new Error("empty");
+        $("#bulk-file-name").textContent = `${file.name} · ${bulkPreviewRows.length}행`;
+        if (!elements.bulkDialog.open) elements.bulkDialog.showModal();
+        renderBulkPreview();
       } catch (error) {
         toast(error.message === "name" ? "CSV 첫 행에 ‘이름’ 열이 필요합니다." : "CSV 명단을 읽지 못했습니다.", true);
       }
     };
     reader.readAsText(file, "UTF-8");
+  }
+
+  function registerBulkRows(openAutoAfter = false) {
+    validateBulkRows();
+    if (!bulkPreviewRows.length || bulkPreviewIssues.errors.length) return;
+    const createdIds = [];
+    transact(() => {
+      for (const row of bulkPreviewRows) {
+        let institution = row.institution
+          ? state.institutions.find((item) => item.name.toLocaleLowerCase("ko") === row.institution.toLocaleLowerCase("ko"))
+          : null;
+        if (row.institution && !institution) {
+          institution = { id: crypto.randomUUID(), name: row.institution, role: roleFromCsv(row.role), displayOrder: state.institutions.length + 1, referenceSeatId: "", note: "" };
+          state.institutions.push(institution);
+        }
+        const attendee = {
+          id: crypto.randomUUID(), name: row.name, org: row.org, title: row.title, type: row.type, group: row.institution, note: row.note,
+          institutionId: institution?.id || "", institutionRank: row.rank ? Number(row.rank) : null,
+          fixedSeatId: row.fixedSeat, seatLocked: Boolean(row.fixedSeat),
+        };
+        state.attendees.push(attendee);
+        createdIds.push(attendee.id);
+        if (row.fixedSeat) state.assignments[row.fixedSeat] = attendee.id;
+      }
+      state.event.organizations = [...state.institutions].sort((a, b) => a.displayOrder - b.displayOrder).map((item) => item.name).join(" · ");
+    }, `${createdIds.length}명의 참석자를 등록했습니다.`);
+    syncEventInputs();
+    elements.bulkDialog.close();
+    bulkPreviewRows = [];
+    if (openAutoAfter) openAutoLayoutDialog();
+  }
+
+  function institutionRowTemplate(institution = {}) {
+    const id = institution.id || crypto.randomUUID();
+    const role = institution.role || "other";
+    const seatOptions = ['<option value="">선택 안 함</option>', ...roomTemplate.seats.filter((seat) => seat.section !== "staff").map((seat) => `<option value="${seat.id}"${seat.id === institution.referenceSeatId ? " selected" : ""}>${seat.id}</option>`)].join("");
+    const tr = document.createElement("tr");
+    tr.dataset.institutionId = id;
+    tr.innerHTML = `
+      <td><input data-inst="name" value="${escapeHtml(institution.name)}" placeholder="기관명" /></td>
+      <td><select data-inst="role"><option value="host"${role === "host" ? " selected" : ""}>주최</option><option value="counterparty"${role === "counterparty" ? " selected" : ""}>상대기관</option><option value="other"${role === "other" ? " selected" : ""}>기타</option></select></td>
+      <td><input class="narrow-input" data-inst="displayOrder" type="number" min="1" step="1" value="${institution.displayOrder || state.institutions.length + 1}" /></td>
+      <td><select class="seat-input" data-inst="referenceSeatId">${seatOptions}</select></td>
+      <td><input data-inst="note" value="${escapeHtml(institution.note)}" placeholder="메모" /></td>
+      <td><button class="mini-action" data-remove-institution type="button" aria-label="기관 삭제">×</button></td>`;
+    tr.querySelector("[data-remove-institution]").addEventListener("click", () => tr.remove());
+    return tr;
+  }
+
+  function openInstitutionsDialog() {
+    const body = $("#institutions-body");
+    body.replaceChildren();
+    [...state.institutions].sort((a, b) => a.displayOrder - b.displayOrder).forEach((institution) => body.append(institutionRowTemplate(institution)));
+    elements.institutionsDialog.showModal();
+  }
+
+  function saveInstitutions() {
+    const rows = $$("#institutions-body tr");
+    const institutions = rows.map((row, index) => ({
+      id: row.dataset.institutionId,
+      name: row.querySelector('[data-inst="name"]').value.trim(),
+      role: row.querySelector('[data-inst="role"]').value,
+      displayOrder: Number(row.querySelector('[data-inst="displayOrder"]').value) || index + 1,
+      referenceSeatId: row.querySelector('[data-inst="referenceSeatId"]').value,
+      note: row.querySelector('[data-inst="note"]').value.trim(),
+    }));
+    if (institutions.some((item) => !item.name)) {
+      toast("모든 참여기관에 기관명을 입력해 주세요.", true);
+      return;
+    }
+    const names = institutions.map((item) => item.name.toLocaleLowerCase("ko"));
+    if (new Set(names).size !== names.length) {
+      toast("같은 이름의 참여기관이 중복되어 있습니다.", true);
+      return;
+    }
+    const kept = new Set(institutions.map((item) => item.id));
+    transact(() => {
+      state.institutions = institutions;
+      state.event.organizations = [...institutions].sort((a, b) => a.displayOrder - b.displayOrder).map((item) => item.name).join(" · ");
+      state.attendees.forEach((attendee) => {
+        if (attendee.institutionId && !kept.has(attendee.institutionId)) attendee.institutionId = "";
+      });
+    }, `${institutions.length}개 참여기관을 저장했습니다.`);
+    syncEventInputs();
+    elements.institutionsDialog.close();
+  }
+
+  function suggestedReferenceMap(institutions) {
+    const map = new Map();
+    const sectionGroups = [
+      institutions.filter((_, index) => index % 2 === 0),
+      institutions.filter((_, index) => index % 2 === 1),
+    ];
+    ["main-left", "main-right"].forEach((section, sectionIndex) => {
+      const seats = roomTemplate.seats.filter((seat) => seat.section === section).sort((a, b) => a.x - b.x);
+      const group = sectionGroups[sectionIndex];
+      group.forEach((institution, slot) => {
+        const position = Math.round(((slot + 1) * (seats.length - 1)) / (group.length + 1));
+        map.set(institution.id, seats[position]?.id || "");
+      });
+    });
+    return map;
+  }
+
+  function openAutoLayoutDialog() {
+    const list = $("#auto-reference-list");
+    list.replaceChildren();
+    const institutions = [...state.institutions].sort((a, b) => a.displayOrder - b.displayOrder);
+    const suggestions = suggestedReferenceMap(institutions);
+    const usedSuggestions = new Set(state.institutions.map((item) => item.referenceSeatId).filter(Boolean));
+    institutions.forEach((institution) => {
+      let selected = institution.referenceSeatId;
+      if (!selected) {
+        selected = suggestions.get(institution.id) || "";
+        if (selected) usedSuggestions.add(selected);
+      }
+      const card = document.createElement("label");
+      card.className = "reference-card";
+      card.dataset.institutionId = institution.id;
+      const options = roomTemplate.seats
+        .filter((seat) => seat.section === "main-left" || seat.section === "main-right")
+        .sort((a, b) => a.x - b.x || a.section.localeCompare(b.section))
+        .map((seat) => `<option value="${seat.id}"${seat.id === selected ? " selected" : ""}>${seat.id}</option>`).join("");
+      card.innerHTML = `<span><strong>${escapeHtml(institution.name)}</strong><small>${institutionRoleLabel(institution.role)}</small></span><select aria-label="${escapeHtml(institution.name)} 기준 좌석"><option value="">미지정</option>${options}</select>`;
+      list.append(card);
+    });
+    $("#auto-include-head").checked = Boolean(state.settings.includeHeadInAuto);
+    $("#auto-fill-staff").checked = state.settings.autoFillStaff !== false;
+    elements.autoLayoutDialog.showModal();
+    calculateAutoDraft();
+  }
+
+  function alternatingSeats(referenceSeat) {
+    const sectionSeats = roomTemplate.seats.filter((seat) => seat.section === referenceSeat.section).sort((a, b) => a.x - b.x);
+    const pivot = sectionSeats.findIndex((seat) => seat.id === referenceSeat.id);
+    const ordered = [referenceSeat];
+    for (let offset = 1; ordered.length < sectionSeats.length; offset += 1) {
+      if (pivot - offset >= 0) ordered.push(sectionSeats[pivot - offset]);
+      if (pivot + offset < sectionSeats.length) ordered.push(sectionSeats[pivot + offset]);
+    }
+    return ordered;
+  }
+
+  function calculateAutoDraft() {
+    const errors = [];
+    const warnings = [];
+    const rows = [];
+    const assignments = {};
+    const usedSeats = new Set();
+    const placedAttendees = new Set();
+    const fixedAttendees = state.attendees.filter((attendee) => attendee.seatLocked && (attendee.fixedSeatId || assignedSeatFor(attendee.id)));
+    for (const attendee of fixedAttendees) {
+      const seatId = attendee.fixedSeatId || assignedSeatFor(attendee.id);
+      if (!seatById.has(seatId)) {
+        errors.push(`${attendee.name}: 고정 좌석이 유효하지 않습니다.`);
+        continue;
+      }
+      if (usedSeats.has(seatId)) {
+        errors.push(`${seatId}: 고정 좌석이 중복되었습니다.`);
+        continue;
+      }
+      assignments[seatId] = attendee.id;
+      usedSeats.add(seatId);
+      placedAttendees.add(attendee.id);
+      rows.push({ status: "고정", institution: institutionById(attendee.institutionId)?.name || "-", attendee: attendee.name, seatId, reason: "자리 고정" });
+    }
+    for (const [seatId, attendeeId] of Object.entries(state.assignments)) {
+      const attendee = attendeeById(attendeeId);
+      const isAutoEligible = attendee && attendee.type !== "수행원" && attendee.institutionId && attendee.institutionRank;
+      const isStaffEligible = attendee && attendee.type === "수행원" && $("#auto-fill-staff").checked;
+      if (!attendee || placedAttendees.has(attendeeId) || isAutoEligible || isStaffEligible) continue;
+      if (!usedSeats.has(seatId)) {
+        assignments[seatId] = attendeeId;
+        usedSeats.add(seatId);
+        placedAttendees.add(attendeeId);
+      }
+    }
+    const referenceMap = new Map();
+    $$("#auto-reference-list .reference-card").forEach((card) => referenceMap.set(card.dataset.institutionId, card.querySelector("select").value));
+    const claimedReferences = new Map();
+    for (const institution of [...state.institutions].sort((a, b) => a.displayOrder - b.displayOrder)) {
+      const attendees = state.attendees
+        .filter((attendee) => attendee.institutionId === institution.id && attendee.type !== "수행원" && attendee.institutionRank && !placedAttendees.has(attendee.id))
+        .sort((a, b) => a.institutionRank - b.institutionRank || a.name.localeCompare(b.name, "ko"));
+      if (!attendees.length) continue;
+      const referenceId = referenceMap.get(institution.id) || "";
+      const referenceSeat = seatById.get(referenceId);
+      if (!referenceSeat || !["main-left", "main-right"].includes(referenceSeat.section)) {
+        errors.push(`${institution.name}: 기준 좌석을 지정해 주세요.`);
+        attendees.forEach((attendee) => rows.push({ status: "충돌", institution: institution.name, attendee: attendee.name, seatId: "-", reason: "기준 좌석 없음" }));
+        continue;
+      }
+      if (claimedReferences.has(referenceId)) {
+        errors.push(`${referenceId}: ${claimedReferences.get(referenceId)}와 ${institution.name}의 기준 좌석이 중복됩니다.`);
+      } else claimedReferences.set(referenceId, institution.name);
+      if (usedSeats.has(referenceId)) {
+        errors.push(`${institution.name}: 기준 좌석 ${referenceId}가 고정 또는 기존 배정과 충돌합니다.`);
+        attendees.forEach((attendee) => rows.push({ status: "충돌", institution: institution.name, attendee: attendee.name, seatId: referenceId, reason: "기준 좌석 사용 중" }));
+        continue;
+      }
+      const orderedSeats = alternatingSeats(referenceSeat);
+      for (const attendee of attendees) {
+        const seat = orderedSeats.find((candidate) => !usedSeats.has(candidate.id));
+        if (!seat) {
+          warnings.push(`${institution.name}: ${attendee.name}을 배치할 같은 장변 좌석이 부족합니다.`);
+          rows.push({ status: "부족", institution: institution.name, attendee: attendee.name, seatId: "-", reason: "같은 장변 좌석 부족" });
+          continue;
+        }
+        assignments[seat.id] = attendee.id;
+        usedSeats.add(seat.id);
+        placedAttendees.add(attendee.id);
+        rows.push({ status: "초안", institution: institution.name, attendee: attendee.name, seatId: seat.id, reason: attendee.institutionRank === 1 ? "기관 기준 좌석" : `${attendee.institutionRank}순위 · 좌우 교차 확장` });
+      }
+    }
+    if ($("#auto-include-head").checked) {
+      const candidate = state.attendees.find((attendee) => attendee.type !== "수행원" && !placedAttendees.has(attendee.id));
+      if (candidate && !usedSeats.has("HEAD-01")) {
+        assignments["HEAD-01"] = candidate.id;
+        usedSeats.add("HEAD-01");
+        placedAttendees.add(candidate.id);
+        rows.push({ status: "초안", institution: institutionById(candidate.institutionId)?.name || "-", attendee: candidate.name, seatId: "HEAD-01", reason: "HEAD-01 사용 옵션" });
+      }
+    }
+    if ($("#auto-fill-staff").checked) {
+      const staffAttendees = state.attendees.filter((attendee) => attendee.type === "수행원" && !placedAttendees.has(attendee.id));
+      const staffSeats = roomTemplate.seats.filter((seat) => seat.section === "staff" && !usedSeats.has(seat.id)).sort((a, b) => a.number - b.number);
+      staffAttendees.forEach((attendee, index) => {
+        const seat = staffSeats[index];
+        if (!seat) {
+          warnings.push(`수행원 좌석 부족: ${attendee.name}`);
+          rows.push({ status: "부족", institution: institutionById(attendee.institutionId)?.name || "-", attendee: attendee.name, seatId: "-", reason: "수행원석 부족" });
+          return;
+        }
+        assignments[seat.id] = attendee.id;
+        usedSeats.add(seat.id);
+        placedAttendees.add(attendee.id);
+        rows.push({ status: "초안", institution: institutionById(attendee.institutionId)?.name || "-", attendee: attendee.name, seatId: seat.id, reason: `수행원 빈자리 · ${seat.staffTableId || ""}` });
+      });
+    }
+    autoDraft = { assignments, rows, errors, warnings, referenceMap };
+    renderAutoDraft();
+  }
+
+  function renderAutoDraft() {
+    const body = $("#auto-preview-body");
+    body.replaceChildren();
+    autoDraft.rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const tone = row.status === "충돌" ? "error" : row.status === "부족" ? "warning" : "";
+      tr.innerHTML = `<td><span class="status-badge ${tone}">${row.status}</span></td><td>${escapeHtml(row.institution)}</td><td>${escapeHtml(row.attendee)}</td><td>${escapeHtml(row.seatId)}</td><td>${escapeHtml(row.reason)}</td>`;
+      body.append(tr);
+    });
+    const summary = $("#auto-validation");
+    summary.className = `validation-summary${autoDraft.errors.length ? " has-error" : autoDraft.warnings.length ? " has-warning" : ""}`;
+    summary.textContent = autoDraft.errors.length ? `적용 불가 · ${autoDraft.errors.join(" · ")}` : autoDraft.warnings.length ? `확인 필요 · ${autoDraft.warnings.join(" · ")}` : `${autoDraft.rows.length}개 배정 초안 검증 완료`;
+    $("#apply-auto-button").disabled = autoDraft.errors.length > 0;
+  }
+
+  function applyAutoDraft() {
+    if (!autoDraft || autoDraft.errors.length) return;
+    transact(() => {
+      state.assignments = { ...autoDraft.assignments };
+      state.settings.includeHeadInAuto = $("#auto-include-head").checked;
+      state.settings.autoFillStaff = $("#auto-fill-staff").checked;
+      for (const institution of state.institutions) institution.referenceSeatId = autoDraft.referenceMap.get(institution.id) || "";
+    }, "자동배치 초안을 한 번의 작업으로 적용했습니다.");
+    elements.autoLayoutDialog.close();
+  }
+
+  function openNameplateMaker() {
+    const people = state.attendees
+      .map((attendee) => ({ name: attendee.name, organization: attendee.org || institutionById(attendee.institutionId)?.name || "", position: attendee.title, logoKey: "default" }))
+      .filter((person) => person.name || person.organization || person.position);
+    if (!people.length) {
+      toast("명패로 보낼 참석자가 없습니다.", true);
+      return;
+    }
+    const localPreview = ["localhost", "127.0.0.1"].includes(location.hostname);
+    const targetOrigin = localPreview ? "http://localhost:4174" : "https://erakeun.github.io";
+    const child = window.open(`${targetOrigin}${localPreview ? "/" : "/nameplate-maker/"}`, "erica-nameplate-maker");
+    if (!child) {
+      toast("팝업이 차단되었습니다. 이 사이트의 팝업을 허용해 주세요.", true);
+      return;
+    }
+    const payload = { type: "erica-seat-planner:nameplates:v1", source: "erica-seat-planner", transferId: crypto.randomUUID(), people };
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      child.postMessage(payload, targetOrigin);
+      if (attempts >= 40) clearInterval(timer);
+    }, 250);
+    const onMessage = (event) => {
+      if (event.origin === targetOrigin && event.source === child && event.data?.type === "erica-seat-planner:nameplates:accepted" && event.data.transferId === payload.transferId) {
+        clearInterval(timer);
+        window.removeEventListener("message", onMessage);
+        toast(`${people.length}명의 명패 데이터를 전달했습니다.`);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    child.postMessage(payload, targetOrigin);
   }
 
   async function exportPng() {
@@ -1168,9 +1650,42 @@
 
   function bindControls() {
     $("#add-attendee-button").addEventListener("click", () => openAttendeeDialog());
+    $("#bulk-attendee-button").addEventListener("click", openBulkDialog);
+    $("#institutions-button").addEventListener("click", openInstitutionsDialog);
+    $("#institution-inline-button").addEventListener("click", openInstitutionsDialog);
+    $("#auto-layout-button").addEventListener("click", openAutoLayoutDialog);
+    $("#nameplate-button").addEventListener("click", openNameplateMaker);
     $("#save-attendee-button").addEventListener("click", saveAttendee);
     $("#delete-attendee-button").addEventListener("click", deleteCurrentAttendee);
     $("#clear-selection-button").addEventListener("click", () => selectAttendee(selectedAttendeeId));
+    $$("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog")?.close()));
+    $$('dialog').forEach((dialog) => dialog.addEventListener("pointerdown", (event) => {
+      const rect = dialog.getBoundingClientRect();
+      const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+      if (event.target === dialog || outside) dialog.close();
+    }));
+    elements.attendeeForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveAttendee();
+    });
+    $("#download-example-csv-button").addEventListener("click", downloadExampleCsv);
+    $("#choose-csv-button").addEventListener("click", () => $("#csv-file-input").click());
+    $("#bulk-preview-body").addEventListener("change", (event) => {
+      const rowIndex = Number(event.target.dataset.bulkRow);
+      const key = event.target.dataset.bulkKey;
+      if (!Number.isInteger(rowIndex) || !key || !bulkPreviewRows[rowIndex]) return;
+      bulkPreviewRows[rowIndex][key] = key === "fixedSeat" ? event.target.value.trim().toUpperCase() : event.target.value;
+      renderBulkPreview();
+    });
+    $("#bulk-register-button").addEventListener("click", () => registerBulkRows(false));
+    $("#bulk-register-auto-button").addEventListener("click", () => registerBulkRows(true));
+    $("#add-institution-button").addEventListener("click", () => $("#institutions-body").append(institutionRowTemplate()));
+    $("#save-institutions-button").addEventListener("click", saveInstitutions);
+    $("#recalculate-auto-button").addEventListener("click", calculateAutoDraft);
+    $("#apply-auto-button").addEventListener("click", applyAutoDraft);
+    $("#auto-reference-list").addEventListener("change", calculateAutoDraft);
+    $("#auto-include-head").addEventListener("change", calculateAutoDraft);
+    $("#auto-fill-staff").addEventListener("change", calculateAutoDraft);
     $("#new-button").addEventListener("click", () => elements.resetDialog.showModal());
     $("#confirm-reset-button").addEventListener("click", () => {
       undoStack.push(snapshot());
@@ -1240,7 +1755,7 @@
       if (action === "json-export") exportJson();
       if (action === "json-import") $("#json-file-input").click();
       if (action === "csv-export") exportCsv();
-      if (action === "csv-import") $("#csv-file-input").click();
+      if (action === "csv-import") openBulkDialog();
     });
     document.addEventListener("click", closeDataMenu);
     $("#json-file-input").addEventListener("change", (event) => {
@@ -1377,6 +1892,7 @@
   }
 
   function init() {
+    $("#seat-id-list").replaceChildren(...roomTemplate.seats.map((seat) => new Option(seat.id, seat.id)));
     syncEventInputs();
     bindEventInputs();
     bindControls();
