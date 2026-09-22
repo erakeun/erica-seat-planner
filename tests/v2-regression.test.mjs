@@ -20,6 +20,8 @@ test("V1 persistence contract and approved seat totals stay intact", () => {
   assert.match(app, /roomTemplate\.geometry\.staffTables\.length !== 7/);
   assert.match(app, /roomTemplate\.geometry\.mainTable\.modules\.length !== 24/);
   assert.match(app, /seat\.id === "MAIN-L-12" \|\| seat\.id === "MAIN-R-12"/);
+  assert.match(app, /"data-connected-geometry": "true"/);
+  assert.match(app, /id: "main-table-surface"/);
 });
 
 test("attendee modal cancellation bypasses required-field validation", () => {

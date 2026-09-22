@@ -66,7 +66,7 @@
         { id: "door-2", label: "출입문 2", x: 302, y: 244, orientation: "horizontal" },
       ]),
       mainTable: Object.freeze({
-        xStart: 330,
+        xStart: 300,
         xEnd: 1350,
         openEndX: 1390,
         upperBaseY: 390,
@@ -80,7 +80,7 @@
         screenEndClearance: mmToUnits(1000),
         modules: MAIN_TABLE_MODULES,
       }),
-      headTable: Object.freeze({ id: "HEAD-TABLE-01", x: 270, y: 440, width: 50, height: 150, seatIds: Object.freeze(["HEAD-01"]) }),
+      headTable: Object.freeze({ id: "HEAD-TABLE-01", seatIds: Object.freeze(["HEAD-01"]), integratedWith: "main-table", structure: "left-vertical-leg", tableCount: 1 }),
       staffTables: STAFF_TABLE_MODULES,
       screen: Object.freeze({ x: 1447, y: 412.5, width: 24, height: 205 }),
       pc: Object.freeze({ x: 1370, y: 150, width: 88, height: 82 }),
@@ -182,6 +182,8 @@
     groupedMainSeatIds.some((seatId) => !uniqueSeatIds.has(seatId)) ||
     roomTemplate.geometry.headTable.seatIds.length !== 1 ||
     roomTemplate.geometry.headTable.seatIds[0] !== "HEAD-01" ||
+    roomTemplate.geometry.headTable.integratedWith !== "main-table" ||
+    roomTemplate.geometry.headTable.tableCount !== 1 ||
     mainTableGeometry.depth !== mmToUnits(800) ||
     mainTableGeometry.screenWallFaceX - mainTableGeometry.openEndX !== mainTableGeometry.screenEndClearance ||
     !headSeatGeometry ||
@@ -489,23 +491,24 @@
     }
 
     const halfDepth = table.depth / 2;
-    const tableControlX = (table.xStart + table.openEndX) / 2;
+    const halfConnectorDepth = table.connectorDepth / 2;
+    const leftOuterX = table.connectorX - halfConnectorDepth;
+    const leftInnerX = table.connectorX + halfConnectorDepth;
+    const outerControlX = (leftOuterX + table.openEndX) / 2;
+    const innerControlX = (leftInnerX + table.openEndX) / 2;
     const upperOuterY = table.upperBaseY - halfDepth;
     const upperInnerY = table.upperBaseY + halfDepth;
     const lowerInnerY = table.lowerBaseY - halfDepth;
     const lowerOuterY = table.lowerBaseY + halfDepth;
-    const upperTablePath = [
-      `M${table.xStart} ${upperOuterY}`,
-      `Q${tableControlX} ${upperOuterY - table.upperCurveDepth * 2} ${table.openEndX} ${upperOuterY}`,
+    const tableOutlinePath = [
+      `M${leftOuterX} ${upperOuterY}`,
+      `Q${outerControlX} ${upperOuterY - table.upperCurveDepth * 2} ${table.openEndX} ${upperOuterY}`,
       `L${table.openEndX} ${upperInnerY}`,
-      `Q${tableControlX} ${upperInnerY - table.upperCurveDepth * 2} ${table.xStart} ${upperInnerY}`,
-      "Z",
-    ].join(" ");
-    const lowerTablePath = [
-      `M${table.xStart} ${lowerInnerY}`,
-      `Q${tableControlX} ${lowerInnerY + table.lowerCurveDepth * 2} ${table.openEndX} ${lowerInnerY}`,
+      `Q${innerControlX} ${upperInnerY - table.upperCurveDepth * 2} ${leftInnerX} ${upperInnerY}`,
+      `L${leftInnerX} ${lowerInnerY}`,
+      `Q${innerControlX} ${lowerInnerY + table.lowerCurveDepth * 2} ${table.openEndX} ${lowerInnerY}`,
       `L${table.openEndX} ${lowerOuterY}`,
-      `Q${tableControlX} ${lowerOuterY + table.lowerCurveDepth * 2} ${table.xStart} ${lowerOuterY}`,
+      `Q${outerControlX} ${lowerOuterY + table.lowerCurveDepth * 2} ${leftOuterX} ${lowerOuterY}`,
       "Z",
     ].join(" ");
     const tableGroup = svgNode("g", {
@@ -514,24 +517,27 @@
       "data-long-edge-depth-mm": 800,
       "data-screen-clearance-mm": 1000,
       "data-units-per-meter": geometry.unitsPerMeter,
-      "data-connected-geometry": "false",
+      "data-connected-geometry": "true",
       "data-open-side": "right",
       "data-endcaps": "square",
       "data-head-screen-axis-y": screenCenterY,
+      "data-head-table-id": geometry.headTable.id,
+      "data-head-seat-ids": geometry.headTable.seatIds.join(","),
+      "data-head-table-count": geometry.headTable.tableCount,
       "data-module-count": table.modules.length,
     });
-    const appendMainTableSection = (section, id, path, curveY) => {
+    tableGroup.append(svgNode("path", {
+      id: "main-table-surface",
+      d: tableOutlinePath,
+      fill: "url(#tableWood)",
+      stroke: "#492316",
+      "stroke-width": 12,
+      "stroke-linejoin": "miter",
+      "data-measurement-status": "long-edges-measured-connector-unmeasured",
+    }));
+    const appendMainTableDividers = (section, id, curveY) => {
       const modules = table.modules.filter((module) => module.section === section);
-      const sectionGroup = svgNode("g", { id, "data-module-count": modules.length, "data-seats-per-module": 2 });
-      sectionGroup.append(svgNode("path", {
-        id: `${id}-surface`,
-        d: path,
-        fill: "url(#tableWood)",
-        stroke: "#492316",
-        "stroke-width": 12,
-        "stroke-linejoin": "miter",
-        "data-measurement-status": "long-edges-measured-head-table-reference-only",
-      }));
+      const dividerGroup = svgNode("g", { id, "data-module-count": modules.length, "data-seats-per-module": 2 });
       modules.slice(0, -1).forEach((module, index) => {
         const nextModule = modules[index + 1];
         const leftSeat = roomTemplate.seats.find((seat) => seat.id === module.seatIds[1]);
@@ -539,7 +545,7 @@
         const dividerX = (leftSeat.x + rightSeat.x) / 2;
         const dividerT = (dividerX - 350) / 975;
         const centerY = curveY(dividerT);
-        sectionGroup.append(svgNode("path", {
+        dividerGroup.append(svgNode("path", {
           d: `M${dividerX} ${centerY - halfDepth + 7}L${dividerX} ${centerY + halfDepth - 7}`,
           stroke: "#5a2b1b",
           "stroke-width": 3,
@@ -549,25 +555,11 @@
           "data-right-seat-ids": nextModule.seatIds.join(","),
         }));
       });
-      tableGroup.append(sectionGroup);
+      tableGroup.append(dividerGroup);
     };
-    appendMainTableSection("main-left", "main-upper-tables", upperTablePath, upperTableY);
-    appendMainTableSection("main-right", "main-lower-tables", lowerTablePath, lowerTableY);
+    appendMainTableDividers("main-left", "main-upper-table-dividers", upperTableY);
+    appendMainTableDividers("main-right", "main-lower-table-dividers", lowerTableY);
     elements.fixtureLayer.append(tableGroup);
-
-    const headTable = geometry.headTable;
-    const headTableGroup = svgNode("g", {
-      id: "head-table",
-      filter: "url(#softShadow)",
-      "data-head-table-id": headTable.id,
-      "data-seat-ids": headTable.seatIds.join(","),
-      "data-independent-table": "true",
-    });
-    headTableGroup.append(
-      svgNode("rect", { x: headTable.x, y: headTable.y, width: headTable.width, height: headTable.height, rx: 3, fill: "#492316" }),
-      svgNode("rect", { x: headTable.x + 6, y: headTable.y + 6, width: headTable.width - 12, height: headTable.height - 12, rx: 2, fill: "url(#tableWood)" }),
-    );
-    elements.fixtureLayer.append(headTableGroup);
 
     const staffGroup = svgNode("g", { id: "staff-tables", filter: "url(#softShadow)", "data-module-count": geometry.staffTables.length, "data-module-depth-mm": 800 });
     for (const [index, staffTable] of geometry.staffTables.entries()) {
