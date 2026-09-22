@@ -26,6 +26,14 @@
       ]),
     });
   }));
+  const MAIN_TABLE_MODULES = Object.freeze(["L", "R"].flatMap((side) => Array.from({ length: 12 }, (_, index) => Object.freeze({
+    id: `MAIN-${side}-TABLE-${String(index + 1).padStart(2, "0")}`,
+    section: side === "L" ? "main-left" : "main-right",
+    seatIds: Object.freeze([
+      `MAIN-${side}-${String(index * 2 + 1).padStart(2, "0")}`,
+      `MAIN-${side}-${String(index * 2 + 2).padStart(2, "0")}`,
+    ]),
+  }))));
 
   const FIELD_MEASUREMENTS = Object.freeze([
     Object.freeze({ dimensionId: "MAIN-UPPER-DEPTH", valueMm: 800, source: "IMG_2248(1).jpg", meaning: "상단 메인 장변 상판 앞뒤 깊이", anchorA: "상판 안쪽 가장자리", anchorB: "상판 바깥쪽 가장자리", sourceType: "user-marked measurement", endpointStatus: "resolved", applicationStatus: "geometry-applied", valueConfidence: "high", geometryConfidence: "high" }),
@@ -58,7 +66,7 @@
         { id: "door-2", label: "출입문 2", x: 302, y: 244, orientation: "horizontal" },
       ]),
       mainTable: Object.freeze({
-        xStart: 300,
+        xStart: 330,
         xEnd: 1350,
         openEndX: 1390,
         upperBaseY: 390,
@@ -70,7 +78,9 @@
         connectorDepth: 54,
         screenWallFaceX: 1490,
         screenEndClearance: mmToUnits(1000),
+        modules: MAIN_TABLE_MODULES,
       }),
+      headTable: Object.freeze({ id: "HEAD-TABLE-01", x: 270, y: 440, width: 50, height: 150, seatIds: Object.freeze(["HEAD-01"]) }),
       staffTables: STAFF_TABLE_MODULES,
       screen: Object.freeze({ x: 1447, y: 412.5, width: 24, height: 205 }),
       pc: Object.freeze({ x: 1370, y: 150, width: 88, height: 82 }),
@@ -152,6 +162,7 @@
   const monitorSeats = roomTemplate.seats.filter((seat) => !seat.section.startsWith("staff"));
   const staffSeatIds = new Set(roomTemplate.seats.filter((seat) => seat.section === "staff").map((seat) => seat.id));
   const groupedStaffSeatIds = roomTemplate.geometry.staffTables.flatMap((table) => table.seatIds);
+  const groupedMainSeatIds = roomTemplate.geometry.mainTable.modules.flatMap((table) => table.seatIds);
   const mainTableGeometry = roomTemplate.geometry.mainTable;
   const headSeatGeometry = roomTemplate.seats.find((seat) => seat.id === "HEAD-01");
   const screenCenterY = roomTemplate.geometry.screen.y + roomTemplate.geometry.screen.height / 2;
@@ -164,6 +175,13 @@
     groupedStaffSeatIds.length !== 14 ||
     groupedStaffSeatIds.some((seatId) => !staffSeatIds.has(seatId)) ||
     new Set(groupedStaffSeatIds).size !== 14 ||
+    roomTemplate.geometry.mainTable.modules.length !== 24 ||
+    roomTemplate.geometry.mainTable.modules.some((table) => table.seatIds.length !== 2) ||
+    groupedMainSeatIds.length !== 48 ||
+    new Set(groupedMainSeatIds).size !== 48 ||
+    groupedMainSeatIds.some((seatId) => !uniqueSeatIds.has(seatId)) ||
+    roomTemplate.geometry.headTable.seatIds.length !== 1 ||
+    roomTemplate.geometry.headTable.seatIds[0] !== "HEAD-01" ||
     mainTableGeometry.depth !== mmToUnits(800) ||
     mainTableGeometry.screenWallFaceX - mainTableGeometry.openEndX !== mainTableGeometry.screenEndClearance ||
     !headSeatGeometry ||
@@ -471,24 +489,23 @@
     }
 
     const halfDepth = table.depth / 2;
-    const halfConnectorDepth = table.connectorDepth / 2;
-    const leftOuterX = table.connectorX - halfConnectorDepth;
-    const leftInnerX = table.connectorX + halfConnectorDepth;
-    const outerControlX = (leftOuterX + table.openEndX) / 2;
-    const innerControlX = (leftInnerX + table.openEndX) / 2;
+    const tableControlX = (table.xStart + table.openEndX) / 2;
     const upperOuterY = table.upperBaseY - halfDepth;
     const upperInnerY = table.upperBaseY + halfDepth;
     const lowerInnerY = table.lowerBaseY - halfDepth;
     const lowerOuterY = table.lowerBaseY + halfDepth;
-    const tableOutlinePath = [
-      `M${leftOuterX} ${upperOuterY}`,
-      `Q${outerControlX} ${upperOuterY - table.upperCurveDepth * 2} ${table.openEndX} ${upperOuterY}`,
+    const upperTablePath = [
+      `M${table.xStart} ${upperOuterY}`,
+      `Q${tableControlX} ${upperOuterY - table.upperCurveDepth * 2} ${table.openEndX} ${upperOuterY}`,
       `L${table.openEndX} ${upperInnerY}`,
-      `Q${innerControlX} ${upperInnerY - table.upperCurveDepth * 2} ${leftInnerX} ${upperInnerY}`,
-      `L${leftInnerX} ${lowerInnerY}`,
-      `Q${innerControlX} ${lowerInnerY + table.lowerCurveDepth * 2} ${table.openEndX} ${lowerInnerY}`,
+      `Q${tableControlX} ${upperInnerY - table.upperCurveDepth * 2} ${table.xStart} ${upperInnerY}`,
+      "Z",
+    ].join(" ");
+    const lowerTablePath = [
+      `M${table.xStart} ${lowerInnerY}`,
+      `Q${tableControlX} ${lowerInnerY + table.lowerCurveDepth * 2} ${table.openEndX} ${lowerInnerY}`,
       `L${table.openEndX} ${lowerOuterY}`,
-      `Q${outerControlX} ${lowerOuterY + table.lowerCurveDepth * 2} ${leftOuterX} ${lowerOuterY}`,
+      `Q${tableControlX} ${lowerOuterY + table.lowerCurveDepth * 2} ${table.xStart} ${lowerOuterY}`,
       "Z",
     ].join(" ");
     const tableGroup = svgNode("g", {
@@ -497,23 +514,60 @@
       "data-long-edge-depth-mm": 800,
       "data-screen-clearance-mm": 1000,
       "data-units-per-meter": geometry.unitsPerMeter,
-      "data-connected-geometry": "true",
+      "data-connected-geometry": "false",
       "data-open-side": "right",
       "data-endcaps": "square",
       "data-head-screen-axis-y": screenCenterY,
+      "data-module-count": table.modules.length,
     });
-    tableGroup.append(
-      svgNode("path", {
-        id: "main-table-surface",
-        d: tableOutlinePath,
+    const appendMainTableSection = (section, id, path, curveY) => {
+      const modules = table.modules.filter((module) => module.section === section);
+      const sectionGroup = svgNode("g", { id, "data-module-count": modules.length, "data-seats-per-module": 2 });
+      sectionGroup.append(svgNode("path", {
+        id: `${id}-surface`,
+        d: path,
         fill: "url(#tableWood)",
         stroke: "#492316",
         "stroke-width": 12,
         "stroke-linejoin": "miter",
-        "data-measurement-status": "long-edges-measured-connector-unmeasured",
-      }),
-    );
+        "data-measurement-status": "long-edges-measured-head-table-reference-only",
+      }));
+      modules.slice(0, -1).forEach((module, index) => {
+        const nextModule = modules[index + 1];
+        const leftSeat = roomTemplate.seats.find((seat) => seat.id === module.seatIds[1]);
+        const rightSeat = roomTemplate.seats.find((seat) => seat.id === nextModule.seatIds[0]);
+        const dividerX = (leftSeat.x + rightSeat.x) / 2;
+        const dividerT = (dividerX - 350) / 975;
+        const centerY = curveY(dividerT);
+        sectionGroup.append(svgNode("path", {
+          d: `M${dividerX} ${centerY - halfDepth + 7}L${dividerX} ${centerY + halfDepth - 7}`,
+          stroke: "#5a2b1b",
+          "stroke-width": 3,
+          opacity: .9,
+          "data-table-divider-after": module.id,
+          "data-left-seat-ids": module.seatIds.join(","),
+          "data-right-seat-ids": nextModule.seatIds.join(","),
+        }));
+      });
+      tableGroup.append(sectionGroup);
+    };
+    appendMainTableSection("main-left", "main-upper-tables", upperTablePath, upperTableY);
+    appendMainTableSection("main-right", "main-lower-tables", lowerTablePath, lowerTableY);
     elements.fixtureLayer.append(tableGroup);
+
+    const headTable = geometry.headTable;
+    const headTableGroup = svgNode("g", {
+      id: "head-table",
+      filter: "url(#softShadow)",
+      "data-head-table-id": headTable.id,
+      "data-seat-ids": headTable.seatIds.join(","),
+      "data-independent-table": "true",
+    });
+    headTableGroup.append(
+      svgNode("rect", { x: headTable.x, y: headTable.y, width: headTable.width, height: headTable.height, rx: 3, fill: "#492316" }),
+      svgNode("rect", { x: headTable.x + 6, y: headTable.y + 6, width: headTable.width - 12, height: headTable.height - 12, rx: 2, fill: "url(#tableWood)" }),
+    );
+    elements.fixtureLayer.append(headTableGroup);
 
     const staffGroup = svgNode("g", { id: "staff-tables", filter: "url(#softShadow)", "data-module-count": geometry.staffTables.length, "data-module-depth-mm": 800 });
     for (const [index, staffTable] of geometry.staffTables.entries()) {
@@ -592,12 +646,14 @@
       const isHead = seat.section === "head";
       const isUpper = seat.direction === "down";
       const isLower = seat.direction === "up";
+      const isCenterSeat = seat.id === "MAIN-L-12" || seat.id === "MAIN-R-12";
       const group = svgNode("g", {
         class: `seat-group${selectedAttendeeId && attendee?.id === selectedAttendeeId ? " selected" : ""}`,
         transform: `translate(${seat.x - seat.width / 2} ${seat.y - seat.height / 2})`,
         tabindex: "0",
         role: "button",
         "data-seat-id": seat.id,
+        ...(isCenterSeat ? { "data-seat-role": "center" } : {}),
         "aria-label": attendee
           ? `${seat.id}, ${attendee.name}, ${attendee.org} ${attendee.title}`.trim()
           : `${seat.id}, 빈 좌석`,
@@ -689,6 +745,14 @@
           "font-weight": 700,
           fill: "#e9eef2",
         }, state.settings.showSeatNumbers ? seat.id : "+"));
+      }
+
+      if (isCenterSeat) {
+        const markerY = isUpper ? -15 : seat.height + 3;
+        group.append(
+          svgNode("rect", { x: centerX - 19, y: markerY, width: 38, height: 12, rx: 6, fill: "#0f6fb5", stroke: "#d9eefb", "stroke-width": 1 }),
+          svgNode("text", { class: "seat-text", x: centerX, y: markerY + 8.3, "text-anchor": "middle", "font-size": 6.6, "font-weight": 900, fill: "#ffffff", "letter-spacing": ".45" }, "CENTER"),
+        );
       }
 
       if (attendee) {
@@ -1741,9 +1805,17 @@
       clone.setAttribute("height", "1080");
       const svgText = new XMLSerializer().serializeToString(clone);
       const image = new Image();
-      image.decoding = "sync";
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
-      await image.decode();
+      const svgUrl = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
+      try {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("svg-load-timeout")), 8000);
+          image.onload = () => { clearTimeout(timeout); resolve(); };
+          image.onerror = () => { clearTimeout(timeout); reject(new Error("svg-load-failed")); };
+          image.src = svgUrl;
+        });
+      } finally {
+        URL.revokeObjectURL(svgUrl);
+      }
       const canvas = document.createElement("canvas");
       canvas.width = 1920;
       canvas.height = 1240;
