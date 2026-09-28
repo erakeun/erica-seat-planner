@@ -207,6 +207,7 @@
     },
     attendees: [],
     institutions: [],
+    mach: { eventId: crypto.randomUUID(), linked: false, revision: 0, rosterRevision: 0, baseline: {}, receipts: {}, history: [], needsSend: false },
     assignments: {},
     settings: { showSeatNumbers: true, mode: "edit", includeHeadInAuto: false, autoFillStaff: true },
   });
@@ -258,13 +259,29 @@
       lastStoredValue = localStorage.getItem(STORAGE_KEY);
       if (!lastStoredValue) return defaultState();
       const saved = JSON.parse(lastStoredValue);
-      validateStateDocument(saved);
-      return sanitizeState(saved);
+      // Give ID-less legacy rows one permanent identity, preserving the exact original first.
+      const migrated = migrateLegacyState(saved);
+      validateStateDocument(migrated);
+      const normalized = sanitizeState(migrated);
+      if (JSON.stringify(normalized) !== JSON.stringify(saved)) {
+        localStorage.setItem(`${STORAGE_KEY}:before-migration`, lastStoredValue);
+        const nextRaw = JSON.stringify(normalized);
+        localStorage.setItem(STORAGE_KEY, nextRaw);
+        lastStoredValue = nextRaw;
+      }
+      return normalized;
     } catch {
       storageBlocked = true;
       recoveryNotice = "저장된 데이터를 읽지 못했습니다. 원본은 보존되어 있으며 자동저장을 중지했습니다. 원본 JSON을 내려받은 뒤 유효한 JSON을 가져오거나 새 배치를 시작해 주세요.";
       return defaultState();
     }
+  }
+
+  function migrateLegacyState(input) {
+    if (!input || input.schemaVersion !== 1 || !Array.isArray(input.attendees)) return input;
+    const next = JSON.parse(JSON.stringify(input));
+    for (const person of next.attendees) if (person && !person.id) person.id = crypto.randomUUID();
+    return next;
   }
 
   function validateStateDocument(input) {
@@ -278,8 +295,19 @@
         ids.add(item.id);
       }
     }
+    if (input.mach !== undefined) {
+      const m = input.mach;
+      if (!object(m) || typeof m.eventId !== 'string' || !m.eventId || !Number.isInteger(m.revision) || m.revision < 0 || !Number.isInteger(m.rosterRevision) || m.rosterRevision < 0 || !object(m.baseline) || !object(m.receipts) || !Array.isArray(m.history)) throw new Error("연결 행사 정보 형식이 올바르지 않습니다.");
+      if (JSON.stringify(m).length > 1500000) throw new Error("연결 이력 크기를 확인해 주세요.");
+    }
     if (input.event !== undefined && (!object(input.event) || Object.values(input.event).some((v) => typeof v !== "string"))) throw new Error("행사 정보 형식이 올바르지 않습니다.");
     if (input.settings !== undefined && !object(input.settings)) throw new Error("설정 형식이 올바르지 않습니다.");
+    const participantIds = new Set();
+    for (const person of input.attendees) {
+      const id = person.participantId || person.id;
+      if (participantIds.has(id) || (person.status !== undefined && !['attending', 'absent', 'replaced'].includes(person.status))) throw new Error("참석자 연결 ID 또는 상태를 확인해 주세요.");
+      participantIds.add(id);
+    }
     const attendeeIds = new Set(input.attendees.map((a) => a.id));
     const assigned = new Set();
     for (const [seat, id] of Object.entries(input.assignments)) {
@@ -307,6 +335,7 @@
   function backupBeforeReplace() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw !== lastStoredValue) throw new Error("최신본 확인 필요");
       if (raw) localStorage.setItem(`${STORAGE_KEY}:before-replace`, raw);
       lastStoredValue = raw;
       storageBlocked = false;
@@ -347,6 +376,10 @@
             institutionRank: Number.isInteger(Number(item.institutionRank)) && Number(item.institutionRank) > 0 ? Number(item.institutionRank) : null,
             fixedSeatId: seatById.has(item.fixedSeatId) ? item.fixedSeatId : "",
             seatLocked: Boolean(item.seatLocked),
+            participantId: String(item.participantId || item.id),
+            status: ['attending', 'absent', 'replaced'].includes(item.status) ? item.status : 'attending',
+            replacesParticipantId: String(item.replacesParticipantId || ''),
+            replacedByParticipantId: String(item.replacedByParticipantId || ''),
           }))
       : [];
     const attendeeIds = new Set(attendees.map((item) => item.id));
@@ -366,6 +399,7 @@
       institutions,
       assignments,
       settings: { ...base.settings, ...(input.settings || {}) },
+      mach: input.mach ? JSON.parse(JSON.stringify(input.mach)) : base.mach,
     };
   }
 
@@ -373,26 +407,50 @@
     return JSON.stringify(state);
   }
 
-  function transact(mutator, message) {
+  function commitState(next, message) {
     if (!canEdit()) return false;
-    undoStack.push(snapshot());
+    const before = snapshot();
+    try {
+      validateStateDocument(next);
+      next = sanitizeState(next);
+      if (typeof Mach !== 'undefined') lastStoredValue = Mach.atomicSave(localStorage, STORAGE_KEY, lastStoredValue, next);
+      else { localStorage.setItem(`${STORAGE_KEY}:before-mach`, lastStoredValue || before); localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); lastStoredValue = JSON.stringify(next); }
+    } catch (error) { toast(`저장하지 않았습니다. ${error.message || '백업 또는 저장 실패'}`, true); return false; }
+    undoStack.push(before);
     if (undoStack.length > 80) undoStack.shift();
     redoStack = [];
-    mutator();
-    scheduleSave();
+    state = next;
     renderAll();
     if (message) toast(message);
     return true;
   }
 
+  function transact(mutator, message) {
+    if (!canEdit()) return false;
+    const original = state;
+    state = JSON.parse(snapshot());
+    try { mutator(); } catch (error) { state = original; throw error; }
+    const next = state;
+    state = original;
+    if (next.mach.linked) { next.mach.revision += 1; next.mach.needsSend = true; }
+    return commitState(next, message);
+  }
+
   function restore(serialized) {
     if (!canEdit()) return;
-    state = sanitizeState(JSON.parse(serialized));
+    const next = sanitizeState(JSON.parse(serialized));
+    if (next.mach.linked) { next.mach.revision = Math.max(next.mach.revision, state.mach.revision) + 1; next.mach.needsSend = true; }
+    try {
+      validateStateDocument(next);
+      if (typeof Mach !== 'undefined') lastStoredValue = Mach.atomicSave(localStorage, STORAGE_KEY, lastStoredValue, next);
+      else { localStorage.setItem(`${STORAGE_KEY}:before-mach`, lastStoredValue || snapshot()); localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); lastStoredValue = JSON.stringify(next); }
+    } catch (error) { toast(`되돌리지 않았습니다. ${error.message}`, true); return; }
+    state = next;
+    machBridge?.invalidateResults();
     selectedAttendeeId = null;
     syncEventInputs();
     applyMode();
     renderAll();
-    scheduleSave();
   }
 
   function scheduleSave() {
@@ -404,6 +462,7 @@
       localStorage.setItem(STORAGE_KEY, snapshot());
       lastStoredValue = snapshot();
     } catch {
+      if (lastStoredValue) { try { state = sanitizeState(JSON.parse(lastStoredValue)); syncEventInputs(); renderAll(); } catch {} }
       $("#save-status").textContent = "저장 실패";
       $(".save-dot").style.background = "#b52f39";
       return;
@@ -413,6 +472,8 @@
       $(".save-dot").style.background = "#178459";
     }, 260);
   }
+
+  function activeAttendees() { return state.attendees.filter(person => !['absent', 'replaced'].includes(person.status)); }
 
   function attendeeById(id) {
     return state.attendees.find((attendee) => attendee.id === id) || null;
@@ -760,7 +821,7 @@
   function renderAttendees() {
     const assignedIds = new Set(Object.values(state.assignments));
     const term = searchTerm.trim().toLocaleLowerCase("ko");
-    const attendees = state.attendees.filter((attendee) => {
+    const attendees = activeAttendees().filter((attendee) => {
       if (attendeeFilter === "unassigned" && assignedIds.has(attendee.id)) return false;
       if (!term) return true;
       return [attendee.name, attendee.org, attendee.title, attendee.type, attendee.group, institutionById(attendee.institutionId)?.name]
@@ -824,17 +885,17 @@
 
   function renderCounts() {
     const assigned = Object.keys(state.assignments).length;
-    const unassigned = Math.max(0, state.attendees.length - assigned);
-    $("#total-count").textContent = state.attendees.length;
+    const unassigned = Math.max(0, activeAttendees().length - assigned);
+    $("#total-count").textContent = activeAttendees().length;
     $("#assigned-count").textContent = assigned;
     $("#unassigned-count").textContent = unassigned;
     $("#available-count").textContent = 63 - assigned;
     $("#tab-unassigned-count").textContent = unassigned;
-    $("#tab-all-count").textContent = state.attendees.length;
+    $("#tab-all-count").textContent = activeAttendees().length;
   }
 
   function nameplatePeople() {
-    return state.attendees
+    return activeAttendees()
       .map((attendee) => ({ name: attendee.name, organization: attendee.org || institutionById(attendee.institutionId)?.name || "", position: attendee.title, logoKey: "none" }))
       .filter((person) => person.name || person.organization || person.position);
   }
@@ -842,8 +903,11 @@
   function renderNameplateAction() {
     const people = nameplatePeople();
     const button = $("#nameplate-button");
-    const message = people.length ? `${people.length}명 전송 준비` : "전송할 참석자가 없습니다.";
+    const historyCount = state.attendees.length - activeAttendees().length;
+    const message = people.length ? `${people.length}명 전송 준비${historyCount ? ` · 불참·교체 이력 ${historyCount}명` : ''}` : historyCount ? `불참·교체 이력 ${historyCount}명 전달` : "전송할 참석자가 없습니다.";
     button.disabled = people.length === 0;
+    // Inactive records still need to reach the nameplate app for collection/recall.
+    if (typeof Mach !== 'undefined' && state.attendees.length > 0) button.disabled = false;
     button.title = people.length ? "참석자 정보로 명패를 만듭니다." : message;
     $("#nameplate-action-help").textContent = message;
   }
@@ -875,6 +939,7 @@
     renderSelected();
     renderUndoRedo();
     renderPrintHeading();
+    renderMachStatus();
   }
 
   function selectAttendee(attendeeId) {
@@ -885,7 +950,7 @@
   }
 
   function assignAttendee(attendeeId, targetSeatId) {
-    if (!attendeeById(attendeeId) || !seatById.has(targetSeatId)) return;
+    if (!attendeeById(attendeeId) || ["absent", "replaced"].includes(attendeeById(attendeeId).status) || !seatById.has(targetSeatId)) return;
     const sourceSeatId = assignedSeatFor(attendeeId);
     const displacedAttendeeId = state.assignments[targetSeatId];
     if (sourceSeatId === targetSeatId) return;
@@ -1083,8 +1148,8 @@
       fixedSeatId: $("#attendee-fixed-seat").value.trim().toUpperCase(),
       seatLocked: $("#attendee-locked").checked,
     };
-    if (!id && state.attendees.length >= 63) { toast("참석자는 최대 63명입니다.", true); return; }
-    if (values.type === "수행원" && state.attendees.filter((a) => a.id !== id && a.type === "수행원").length >= 14) { toast("수행원은 최대 14명입니다.", true); return; }
+    if (!id && activeAttendees().length >= 63) { toast("참석자는 최대 63명입니다.", true); return; }
+    if (values.type === "수행원" && activeAttendees().filter((a) => a.id !== id && a.type === "수행원").length >= 14) { toast("수행원은 최대 14명입니다.", true); return; }
     if (Object.entries({name:80, org:120, title:80, group:100, note:500}).some(([key, max]) => values[key].length > max)) { toast("입력 길이를 확인해 주세요. 이름·직위 80자, 소속 120자, 그룹 100자, 비고 500자까지 가능합니다.", true); return; }
     if (values.institutionId && !values.group) values.group = institutionById(values.institutionId)?.name || "";
     if (values.institutionRank !== null && (!Number.isInteger(values.institutionRank) || values.institutionRank < 1)) {
@@ -1126,6 +1191,7 @@
   function deleteCurrentAttendee() {
     const id = $("#attendee-id").value;
     const attendee = attendeeById(id);
+    if (state.mach.linked && attendee) { toast("연결 참석자는 원큐에서 불참·대리참석 처리해 주세요. 이력과 기존 출력물 확인을 보존합니다.", true); return; }
     if (!attendee || !window.confirm(`${attendee.name} 참석자를 삭제할까요?`)) return;
     transact(() => {
       const seatId = assignedSeatFor(id);
@@ -1258,14 +1324,14 @@
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(reader.result);
+        if (reader.result.length > 2000000) throw new Error("JSON은 2MB 이하여야 합니다.");
+        const parsed = migrateLegacyState(JSON.parse(reader.result));
         validateStateDocument(parsed);
         const next = sanitizeState(parsed);
         if (!window.confirm("현재 배치를 가져온 JSON으로 교체할까요? 기존 원본은 브라우저에 백업되며 가져오기 직후 실행 취소할 수 있습니다.")) return;
         if (!backupBeforeReplace()) return;
-        undoStack.push(snapshot());
-        redoStack = [];
-        state = next;
+        if (!commitState(next)) return;
+        machBridge?.invalidateResults();
         selectedAttendeeId = null;
         syncEventInputs();
         applyMode();
@@ -1287,7 +1353,7 @@
 
   function exportCsv() {
     const headers = ["이름", "소속", "직위", "기관", "기관역할", "기관내순위", "좌석고정", "참석구분", "비고", "배정좌석", "그룹"];
-    const rows = state.attendees.map((attendee) => [
+    const rows = activeAttendees().map((attendee) => [
       attendee.name,
       attendee.org,
       attendee.title,
@@ -1407,8 +1473,8 @@
       row._errors.forEach((message) => errors.push(`${line}행: ${message}`));
       row._warnings.forEach((message) => warnings.push(`${line}행: ${message}`));
     });
-    if (state.attendees.length + bulkPreviewRows.length > 63) errors.push("전체 참석자가 63명을 초과합니다.");
-    const staffCount = state.attendees.filter((a) => a.type === "수행원").length + bulkPreviewRows.filter((row) => row.type === "수행원").length;
+    if (activeAttendees().length + bulkPreviewRows.length > 63) errors.push("전체 참석자가 63명을 초과합니다.");
+    const staffCount = activeAttendees().filter((a) => a.type === "수행원").length + bulkPreviewRows.filter((row) => row.type === "수행원").length;
     if (staffCount > 14) errors.push("수행원 참석자가 14명을 초과합니다.");
     bulkPreviewIssues = { errors, warnings };
     return bulkPreviewIssues;
@@ -1593,7 +1659,7 @@
     $("#auto-include-head").checked = Boolean(state.settings.includeHeadInAuto);
     $("#auto-fill-staff").checked = state.settings.autoFillStaff !== false;
     $("#auto-replace-existing").checked = false;
-    $("#auto-head-attendee").replaceChildren(new Option("HEAD-01 참석자 직접 선택", ""), ...state.attendees.filter((a) => a.type !== "수행원").map((a) => new Option(a.name, a.id)));
+    $("#auto-head-attendee").replaceChildren(new Option("HEAD-01 참석자 직접 선택", ""), ...activeAttendees().filter((a) => a.type !== "수행원").map((a) => new Option(a.name, a.id)));
     $("#auto-head-attendee").value = state.assignments["HEAD-01"] || "";
     elements.autoLayoutDialog.showModal();
     calculateAutoDraft();
@@ -1617,7 +1683,7 @@
     const assignments = {};
     const usedSeats = new Set();
     const placedAttendees = new Set();
-    const fixedAttendees = state.attendees.filter((attendee) => attendee.seatLocked && (attendee.fixedSeatId || assignedSeatFor(attendee.id)));
+    const fixedAttendees = activeAttendees().filter((attendee) => attendee.seatLocked && (attendee.fixedSeatId || assignedSeatFor(attendee.id)));
     for (const attendee of fixedAttendees) {
       const seatId = attendee.fixedSeatId || assignedSeatFor(attendee.id);
       if (!seatById.has(seatId)) {
@@ -1653,7 +1719,7 @@
     const claimedReferences = new Map();
     for (const institution of state.institutions) {
       const reference = referenceMap.get(institution.id);
-      if (!reference || !state.attendees.some((a) => a.institutionId === institution.id && a.type !== "수행원" && a.institutionRank)) continue;
+      if (!reference || !activeAttendees().some((a) => a.institutionId === institution.id && a.type !== "수행원" && a.institutionRank)) continue;
       if (claimedReferences.has(reference)) errors.push(`${reference}: 기관 기준 좌석이 중복됩니다.`);
       else claimedReferences.set(reference, institution.id);
     }
@@ -1668,7 +1734,7 @@
       }
     }
     for (const institution of [...state.institutions].sort((a, b) => a.displayOrder - b.displayOrder)) {
-      const attendees = state.attendees
+      const attendees = activeAttendees()
         .filter((attendee) => attendee.institutionId === institution.id && attendee.type !== "수행원" && attendee.institutionRank && !placedAttendees.has(attendee.id))
         .sort((a, b) => a.institutionRank - b.institutionRank || a.name.localeCompare(b.name, "ko"));
       if (!attendees.length) continue;
@@ -1700,7 +1766,7 @@
       }
     }
     if ($("#auto-fill-staff").checked) {
-      const staffAttendees = state.attendees.filter((attendee) => attendee.type === "수행원" && !placedAttendees.has(attendee.id));
+      const staffAttendees = activeAttendees().filter((attendee) => attendee.type === "수행원" && !placedAttendees.has(attendee.id));
       const staffSeats = roomTemplate.seats.filter((seat) => seat.section === "staff" && !usedSeats.has(seat.id)).sort((a, b) => a.number - b.number);
       staffAttendees.forEach((attendee, index) => {
         const seat = staffSeats[index];
@@ -1715,7 +1781,7 @@
         rows.push({ status: "초안", institution: institutionById(attendee.institutionId)?.name || "-", attendee: attendee.name, seatId: seat.id, reason: `수행원 빈자리 · ${seat.staffTableId || ""}` });
       });
     }
-    for (const attendee of state.attendees) {
+    for (const attendee of activeAttendees()) {
       if (placedAttendees.has(attendee.id)) continue;
       if (attendee.institutionId && attendee.institutionRank && attendee.type !== "수행원") continue;
       if (attendee.type === "수행원" && $("#auto-fill-staff").checked) continue;
@@ -1756,6 +1822,7 @@
 
   function openNameplateMaker() {
     const people = nameplatePeople();
+    if (typeof Mach !== 'undefined' && machBridge) { sendMach('nameplate', 'roster'); return; }
     if (!people.length) {
       toast("명패로 보낼 참석자가 없습니다.", true);
       return;
@@ -1891,9 +1958,8 @@
     $("#new-button").addEventListener("click", () => elements.resetDialog.showModal());
     $("#confirm-reset-button").addEventListener("click", () => {
       if (!backupBeforeReplace()) return;
-      undoStack.push(snapshot());
-      redoStack = [];
-      state = defaultState();
+      if (!commitState(defaultState())) return;
+      machBridge?.invalidateResults();
       selectedAttendeeId = null;
       syncEventInputs();
       applyMode();
@@ -1958,7 +2024,7 @@
       if (action === "json-export") exportJson();
       if (action === "json-import") $("#json-file-input").click();
       if (action === "backup-export") {
-        const backup = localStorage.getItem(`${STORAGE_KEY}:before-replace`);
+        const backup = localStorage.getItem(`${STORAGE_KEY}:before-mach`) || localStorage.getItem(`${STORAGE_KEY}:before-replace`) || localStorage.getItem(`${STORAGE_KEY}:before-migration`);
         if (backup) downloadBlob(new Blob([backup], { type: "application/json" }), "PRIME-교체전-백업.json");
         else toast("저장된 교체 전 백업이 없습니다.");
       }
@@ -2047,7 +2113,7 @@
             };
           });
           if (!canEdit()) throw new Error("원본 보호 중입니다.");
-          if (state.attendees.length + additions.length > 63 || state.attendees.concat(additions).filter((a) => a.type === "수행원").length > 14) throw new Error("좌석 수를 초과합니다.");
+          if (activeAttendees().length + additions.length > 63 || activeAttendees().concat(additions).filter((a) => a.type === "수행원").length > 14) throw new Error("좌석 수를 초과합니다.");
           transact(() => state.attendees.push(...additions));
           return { added: additions.length, attendeeIds: additions.map((item) => item.id), totalAttendees: state.attendees.length };
         },
@@ -2105,6 +2171,153 @@
     }
   }
 
+  let machBridge = null;
+  let machPending = null;
+  let machOutbound = {};
+  let machPrintPending = null;
+
+  function renderMachStatus() {
+    const target = $('#mach-status');
+    if (!target) return;
+    const inactive = state.attendees.length - activeAttendees().length;
+    target.textContent = `${state.mach.linked ? `연결 행사: ${state.event.title}` : '단독 배치 · 원큐에서 보낸 명단을 확인하면 연결됩니다.'}${inactive ? ` · 불참·교체 이력 ${inactive}명 보존` : ''}${state.mach.needsSend ? ' · 자리 결과 전달 필요' : ''}${state.mach.pendingIds?.length ? ` · 명단 ${state.mach.pendingIds.length}명 반영 대기 (명패 전달 제외)` : ''}`;
+  }
+
+  function machPayload(kind) {
+    return Mach.createTransfer({ kind, eventId: state.mach.eventId, eventName: state.event.title, revision: kind === 'roster' && state.mach.linked ? state.mach.rosterRevision : Math.max(state.mach.revision, state.mach.rosterRevision), baseRevision: state.mach.rosterRevision, participants: state.attendees.filter(person => kind !== 'roster' || !(state.mach.pendingIds || []).includes(person.participantId || person.id)).map(person => ({ ...MachPrime.current(person), seatId: assignedSeatFor(person.id) || '', seatLocked: Boolean(person.seatLocked) })) });
+  }
+
+  async function sendMach(target, kind) {
+    if (storageBlocked) { toast('저장된 최신본을 먼저 확인해 주세요.', true); return; }
+    if (!state.attendees.length) { toast('전달할 참석자가 없습니다.', true); return; }
+    try {
+      const payload = machPayload(kind);
+      if (!payload.participants.length) { toast('미해결 명단 변경을 먼저 확인해 주세요. 반영 대기 참석자는 명패로 전달하지 않습니다.', true); return; }
+      if (kind === 'roster' && state.mach.pendingIds?.length) toast(`반영 대기 ${state.mach.pendingIds.length}명은 이번 명패 전달에서 제외합니다. 명패의 기존 자료는 유지됩니다.`);
+      machOutbound[target] = payload;
+      await machBridge.send(target, payload);
+    } catch (error) { $('#mach-transfer-status').textContent = error.message; }
+  }
+
+  function receiveMach(payload, respond = () => {}, meta = {sourceApp:'file'}) {
+    try {
+      Mach.validateTransfer(payload);
+      if (payload.kind === 'print' && meta.sourceApp === 'nameplate') {
+        if (payload.eventId !== state.mach.eventId || payload.baseRevision !== state.mach.rosterRevision) throw new Error('출력 확인본의 행사가 다르거나 최신 명단 확인이 필요합니다.');
+        machPrintPending = {payload, respond};
+        $('#mach-print-forward').hidden = false;
+        $('#mach-transfer-status').textContent = '명패 출력 확인을 받았습니다. 원큐로 출력 확인 전달을 눌러 주세요.';
+        respond({status:'pending',message:'PRIME에서 원큐 전달 확인 대기'});
+        return;
+      }
+      if (payload.kind !== 'roster' || !['oneq','file'].includes(meta.sourceApp)) throw new Error('이 창은 원큐의 참석자 명단만 가져올 수 있습니다.');
+      if (machPending && machPending.payload.transferId !== payload.transferId) throw new Error('먼저 현재 미리보기를 반영하거나 취소해 주세요.');
+      const preview = MachPrime.preview(state, payload);
+      if (preview.duplicate) { respond(preview.duplicate); return; }
+      if (machPending?.payload.transferId === payload.transferId) { respond({status:'pending'}); return; }
+      machPending = {payload, respond, preview};
+      renderMachPreview();
+      $('#mach-dialog').showModal();
+      respond({status:'pending',pendingIds:preview.rows.map(row=>row.participantId)});
+    } catch (error) { respond({status:'conflict',message:error.message}); toast(error.message, true); }
+  }
+
+  function machDisplay(field, value) {
+    if (field === 'status') return ({attending:'참석',absent:'불참',replaced:'대리로 교체'})[value] || '미확인';
+    if (field === 'replacesParticipantId') return state.attendees.find(person=>(person.participantId || person.id)===value)?.name || (value ? '원 참석자 확인 필요' : '관계 없음');
+    return value || '없음';
+  }
+
+  function renderMachPreview() {
+    const p = machPending.preview;
+    $('#mach-event-preview').textContent = `보낸 행사: ${machPending.payload.eventName || '(이름 없음)'} · 현재 배치: ${state.event.title} · ${p.rows.length}건 확인. 선택한 정보만 반영하며, 기존 도면과 무관한 자리는 유지합니다.${p.staleBase ? ' 보낸 명단의 기준이 오래되었습니다. 차이가 있는 기존 정보는 항목별 확인이 필요합니다.' : ''}`;
+    $('#mach-link-confirm-label').hidden = state.mach.linked;
+    $('#mach-link-confirm').checked = state.mach.linked;
+    const list = $('#mach-preview-list'); list.replaceChildren();
+    for (const [index, row] of p.rows.entries()) {
+      const card = document.createElement('section'); card.className = 'mach-change'; card.dataset.machRow = String(index);
+      const label = document.createElement('label'); const check = document.createElement('input'); check.type = 'checkbox'; check.dataset.machSelect = ''; check.checked = false;
+      label.append(check, document.createTextNode(` ${row.incoming.name} · ${!row.localId ? (row.incoming.replacesParticipantId ? '대리참석' : '추가') : row.incoming.status === 'absent' ? '불참' : '정보 정정'}`)); card.append(label);
+      const detail = document.createElement('p');
+      detail.textContent = `${row.before ? `${row.before.name} / ${row.before.organization} / ${row.before.position} / ${machDisplay('status',row.before.status)}` : '기존 명단에 없음'} → ${row.incoming.name} / ${row.incoming.organization} / ${row.incoming.position} / ${machDisplay('status',row.incoming.status)}\n좌석: ${row.seatId || row.replacementSeatId || '미배정'} → ${['absent','replaced'].includes(row.incoming.status) ? '해당 자리만 비움' : row.incoming.replacesParticipantId && !row.localId ? '아래에서 선택' : row.seatId || '미배정 유지'} · 좌석배치표·운영명단 갱신 / 명패 표시가 바뀌면 재출력 확인`;
+      card.append(detail);
+      if (row.candidates.length) {
+        const matchLabel = document.createElement('label'); matchLabel.textContent = '이름이 같은 기존 참석자 확인 ';
+        const select = document.createElement('select'); select.dataset.machMatch = ''; select.append(new Option('직접 선택해 주세요', ''), new Option('별개의 새 참석자로 추가', 'new'));
+        row.candidates.forEach(candidate => select.append(new Option(`${candidate.name} / ${candidate.organization} / ${candidate.seatId || '미배정'}`, candidate.id)));
+        matchLabel.append(select); card.append(matchLabel);
+        const hint = document.createElement('p'); hint.textContent = '기존 참석자 연결 시 아래 정보 선택도 확인합니다. 이름만으로 자동 병합하지 않습니다.'; card.append(hint);
+      }
+      const reviewFields = row.candidates.length ? ['name','organization','position','status','replacesParticipantId'] : [...new Set([...row.conflicts, ...row.changed.filter(field=>row.base && row.before?.[field] !== row.base[field])])];
+      for (const field of reviewFields) {
+        const fieldLabel = document.createElement('label'); fieldLabel.className = 'mach-field';
+        fieldLabel.textContent = `${({name:'이름',organization:'소속',position:'직책',status:'참석 상태',replacesParticipantId:'대리 관계'})[field]} 확인 · 기준 ${machDisplay(field,row.base?.[field])} / 로컬 ${row.before ? machDisplay(field,row.before[field]) : '연결 후보 확인'} / 수신 ${machDisplay(field,row.incoming[field])} `;
+        const select = document.createElement('select'); select.dataset.machField = field;
+        select.append(new Option('미해결 · 선택 필요',''),new Option('원큐 내용 적용','incoming'),new Option('로컬 내용 유지 (반영 대기)','local'),new Option('직접 정정 (차이가 있으면 반영 대기)','manual'));
+        const manual = document.createElement(['status','replacesParticipantId'].includes(field) ? 'select' : 'input'); manual.dataset.machManual = field;
+        if (field === 'status') manual.append(new Option('참석','attending'),new Option('불참','absent'),new Option('대리로 교체','replaced'));
+        else if (field === 'replacesParticipantId') { manual.append(new Option('대리 관계 없음','')); state.attendees.forEach(person=>manual.append(new Option(person.name,person.participantId || person.id))); }
+        else { manual.placeholder = '직접 정정'; manual.maxLength = 2000; }
+        fieldLabel.append(select,manual);card.append(fieldLabel);
+      }
+      if (row.incoming.replacesParticipantId && !row.localId) {
+        const label = document.createElement('label');label.textContent = '대리참석 자리 처리 ';
+        const select = document.createElement('select');select.dataset.machSeatMode='';select.append(new Option('직접 선택해 주세요',''),new Option('기존 자리 승계','inherit'),new Option('미배정','unassigned'),new Option('다른 빈 자리 지정','other'));
+        const seat = document.createElement('input');seat.dataset.machSeat='';seat.setAttribute('list','seat-id-list');seat.placeholder='다른 자리 ID';label.append(select,seat);card.append(label);
+      }
+      if (row.locked || row.incoming.replacesParticipantId) {
+        const label = document.createElement('label');const input = document.createElement('input');input.type='checkbox';input.dataset.machLock='';label.append(input,document.createTextNode(' 고정석 해제·승계 또는 중앙석 변경을 명시적으로 확인합니다.'));card.append(label);
+      }
+      list.append(card);
+    }
+    $('#mach-apply').disabled = false;
+    $('#mach-apply').textContent = p.rows.length ? '선택한 변경 반영' : '변경 없음 확인';
+    if (!p.rows.length) $('#mach-preview-list').textContent='변경할 참석자 정보가 없습니다. 좌석은 유지됩니다.';
+  }
+
+  function applyMachPreview() {
+    if (!machPending) return;
+    try {
+      if (!$('#mach-link-confirm').checked) throw new Error('대상 행사를 확인하고 현재 배치 연결에 체크해 주세요.');
+      const choices = {};
+      for (const card of $$('#mach-preview-list [data-mach-row]')) {
+        const row = machPending.preview.rows[Number(card.dataset.machRow)];
+        const fields = {};
+        for (const select of card.querySelectorAll('[data-mach-field]')) fields[select.dataset.machField] = {mode:select.value,value:[...card.querySelectorAll('[data-mach-manual]')].find(input=>input.dataset.machManual===select.dataset.machField)?.value || ''};
+        choices[row.participantId] = {selected:card.querySelector('[data-mach-select]').checked, fields, matchId:card.querySelector('[data-mach-match]')?.value,seatMode:card.querySelector('[data-mach-seat-mode]')?.value,seatId:card.querySelector('[data-mach-seat]')?.value.trim().toUpperCase(),confirmLock:Boolean(card.querySelector('[data-mach-lock]')?.checked)};
+      }
+      const applied = MachPrime.apply(state,machPending.preview,choices,[...seatById.keys()]);
+      if (!state.mach.linked) applied.state.event.title = machPending.payload.eventName || state.event.title;
+      if (!commitState(applied.state,'선택한 변경을 저장했습니다. 다른 도구에는 다시 전달해 주세요.')) return;
+      syncEventInputs();
+      machPending.respond(applied.result);
+      $('#mach-result').textContent=`반영 완료 ${applied.result.appliedIds.length}명 · 반영 대기 ${applied.result.pendingIds.length}명. 명패 만들기를 눌러 변경분을 전달하세요.`;
+      if (applied.result.pendingIds.length) { machPending.preview=MachPrime.preview(state,machPending.payload,true);renderMachPreview(); }
+      else { machPending=null;$('#mach-dialog').close(); }
+    } catch (error) { $('#mach-result').textContent=error.message;toast(error.message,true); }
+  }
+
+  function initMach() {
+    if (typeof Mach === 'undefined') return;
+    machBridge=Mach.createBridge({app:'prime',onTransfer:receiveMach,onStatus:info=>{
+      const labels={preparing:'전달 준비',received:'상대 도구 수신 확인',pending:'상대 도구 반영 대기',applied:'상대 도구 반영 완료',cancelled:'취소',conflict:'최신본·충돌 확인 필요',unknown:'반영 여부 확인 필요'};
+      $('#mach-transfer-status').textContent=`${info.targetApp==='nameplate'?'명패':'원큐'}: ${labels[info.status]||info.status}${info.message?' · '+info.message:''}`;
+    }});
+    $('#mach-results-send').addEventListener('click',()=>sendMach('oneq','seats'));
+    $('#mach-json-export').addEventListener('click',()=>Mach.exportFile(machPayload('roster'),'PRIME-연동명단.json'));
+    $('#mach-json-import').addEventListener('click',()=>$('#mach-file-input').click());
+    $('#mach-file-input').addEventListener('change',async event=>{try{if(event.target.files[0]) receiveMach(await Mach.readFile(event.target.files[0]));}catch(error){toast(error.message,true);}event.target.value='';});
+    $('#mach-show-changes').addEventListener('click',()=>{if(machPending)$('#mach-dialog').showModal();else toast('원큐의 좌석배치기로 보내기 또는 연동 JSON 가져오기로 명단을 전달해 주세요.');});
+    $('#mach-all').addEventListener('click',()=>$$('#mach-preview-list [data-mach-select]').forEach(input=>input.checked=true));
+    $('#mach-apply').addEventListener('click',applyMachPreview);
+    $('#mach-cancel').addEventListener('click',()=>{machPending?.respond({status:'cancelled',message:'사용자가 미리보기를 취소했습니다.'});machPending=null;$('#mach-dialog').close();});
+    $('#mach-dialog').addEventListener('cancel',()=>{machPending?.respond({status:'cancelled'});machPending=null;});
+    $('#mach-retry').addEventListener('click',()=>{for(const [target,payload] of Object.entries(machOutbound))machBridge.retry(target,payload.transferId).catch(error=>toast(error.message,true));});
+    $('#mach-copy-summary').addEventListener('click',async()=>{const summary=machPending?.preview.rows.map(row=>`${row.incoming.name}: ${row.before?'정보 변경':'추가·대리참석'} / ${row.seatId||row.replacementSeatId||'미배정'} / 명패·운영명단 확인`).join('\n')||$('#mach-result').textContent;try{await navigator.clipboard.writeText(summary);toast('변경 요약을 복사했습니다.');}catch{toast('복사할 수 없습니다. 화면의 변경 내용을 선택해 복사해 주세요.',true);}});
+    $('#mach-print-forward').addEventListener('click',async()=>{if(!machPrintPending)return;try{const result=await machBridge.send('oneq',machPrintPending.payload);machPrintPending.respond(result);if(result.status==='applied'){$('#mach-print-forward').hidden=true;machPrintPending=null;}}catch(error){toast(error.message,true);}});
+    renderMachStatus();
+  }
+
   function init() {
     $("#seat-id-list").replaceChildren(...roomTemplate.seats.map((seat) => new Option(seat.id, seat.id)));
     syncEventInputs();
@@ -2127,6 +2340,7 @@
       toast("다른 탭에서 배치가 변경되었습니다. 덮어쓰기를 막기 위해 저장을 중지했습니다. 새로고침해 주세요.", true);
     });
     registerWebMcpTools();
+    initMach();
   }
 
   init();
