@@ -304,3 +304,17 @@ h1, h2, p { margin-top: 0; }
   .room-viewport, .output-mode .room-viewport { height: 145mm; min-height: 0; overflow: visible; background: #fff; }
   #room-svg { height: 100%; }
 }
+
+/* Change review adds controls without altering the seat canvas. */
+.mach-bar { padding: 12px 22px; border-bottom: 1px solid #d5deea; background: #f4f8ff; }
+.mach-bar p { margin: 6px 0; font-size: 13px; overflow-wrap: anywhere; }
+.mach-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.mach-modal { width: min(850px, calc(100vw - 24px)); max-height: 90dvh; overflow: auto; padding: 24px; }
+.mach-modal p { line-height: 1.65; }
+.mach-change { border: 1px solid #cad6e5; padding: 14px; margin: 14px 0; border-radius: 10px; overflow-wrap: anywhere; }
+.mach-change p { white-space: pre-line; }
+.mach-change label { display: block; margin: 8px 0; }
+.mach-change select, .mach-change input:not([type=checkbox]) { max-width: 100%; padding: 8px; border: 1px solid #a6b7cb; border-radius: 6px; }
+.mach-field select, .mach-field input { display: block; width: 100%; margin: 6px 0; }
+@media (max-width: 600px) { .mach-bar { padding: 10px; } .mach-buttons .button { flex: 1 1 150px; white-space: normal; min-height: 40px; } .mach-modal { padding: 14px; } }
+@media print { .mach-bar, .mach-modal { display: none !important; } }

@@ -75,6 +75,19 @@
         </label>
       </section>
 
+      <section class="mach-bar edit-only" aria-label="행사 변경사항 연결">
+        <p id="mach-status"></p>
+        <div class="mach-buttons">
+          <button class="button ghost" id="mach-show-changes" type="button">원큐 변경사항 확인</button>
+          <button class="button primary" id="mach-results-send" type="button">자리 결과 원큐로 전달</button>
+          <button class="button ghost" id="mach-json-export" type="button">연동 JSON 내보내기</button>
+          <button class="button ghost" id="mach-json-import" type="button">연동 JSON 가져오기</button>
+          <button class="button ghost" id="mach-retry" type="button">전달 여부 다시 확인</button>
+          <button class="button ghost" id="mach-print-forward" type="button" hidden>원큐로 출력 확인 전달</button>
+        </div>
+        <p id="mach-transfer-status" role="status">같은 브라우저에서 연결 버튼으로 연 창 사이에 확인 후 전달합니다. 다른 PC에서는 앱별 JSON을 보관하세요.</p>
+        <p id="mach-result" role="status"></p>
+      </section>
       <main class="workspace">
         <aside class="attendee-panel edit-only" aria-label="참석자 관리">
           <div class="panel-heading">
@@ -305,11 +318,24 @@
       </form>
     </dialog>
 
+    <dialog id="mach-dialog" class="modal mach-modal" aria-labelledby="mach-title">
+      <h2 id="mach-title">원큐 명단 변경사항 확인</h2>
+      <p id="mach-event-preview"></p>
+      <label id="mach-link-confirm-label"><input id="mach-link-confirm" type="checkbox" /> 보낸 행사와 현재 좌석배치의 연결을 확인했습니다.</label>
+      <p>불참·교체 이력은 보존합니다. 선택하지 않은 변경은 반영 대기이며, 전체 선택해도 충돌·고정석 확인은 생략되지 않습니다.</p>
+      <div class="mach-buttons"><button class="button ghost" id="mach-all" type="button">전체 선택</button><button class="button ghost" id="mach-copy-summary" type="button">변경 요약 복사</button></div>
+      <div id="mach-preview-list"></div>
+      <div class="modal-actions"><button class="button ghost" id="mach-cancel" type="button">취소</button><button class="button primary" id="mach-apply" type="button">선택한 변경 반영</button></div>
+      <p>반영 직전 복원본이 브라우저에 저장됩니다. 실행 취소는 PRIME만 되돌리며, 다른 도구에는 다시 전달해야 합니다.</p>
+    </dialog>
+    <input id="mach-file-input" type="file" accept="application/json,.json" hidden />
     <input id="json-file-input" type="file" accept="application/json,.json" hidden />
     <input id="csv-file-input" type="file" accept="text/csv,.csv" hidden />
     <datalist id="seat-id-list"></datalist>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-    <script src="./app.js?v=20260922-head-table-restore"></script>
+    <script src="./mach-contract.js?v=20260928"></script>
+    <script src="./mach-prime.js?v=20260928"></script>
+    <script src="./app.js?v=20260928-mach"></script>
   </body>
 </html>
